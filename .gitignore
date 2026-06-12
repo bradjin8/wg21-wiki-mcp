@@ -1,0 +1,31 @@
+# Secrets - never commit
+.env
+cookies.txt
+cookies.json
+
+# Local shared cache (may contain confidential committee wiki content)
+.isocpp.wiki/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.lock
+
+# Any scraped/dumped wiki content must never be committed
+dumps/
+output/
+*.wiki
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
