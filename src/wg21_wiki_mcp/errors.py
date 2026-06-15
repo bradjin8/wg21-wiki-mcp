@@ -55,13 +55,7 @@ class AuthError(WikiMcpError):
 
 
 class PageNotFound(WikiMcpError):
-    """The requested page does not exist on the wiki.
-
-    The exception message must describe what was searched for (title, section
-    number) and must never include wiki page content.  ``to_mcp_error`` passes
-    the message through as-is; the safety invariant is enforced by caller
-    convention.
-    """
+    """The requested page does not exist on the wiki."""
 
 
 class FetchError(WikiMcpError):
