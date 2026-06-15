@@ -140,6 +140,22 @@ print(page.content)  # exact wikitext
 - [`python-dotenv`](https://pypi.org/project/python-dotenv/) - optional `.env` loading for local dev.
 - [`filelock`](https://py-filelock.readthedocs.io/) - cross-process single-flight page locking.
 
+## Error contract
+
+Every tool error surfaces as a structured `McpError` with a distinct,
+documented code. Messages are actionable and contain no credentials or wiki
+page content.
+
+| Code | Name | Meaning |
+| --- | --- | --- |
+| `1` | `PAGE_NOT_FOUND` | The requested page does not exist on the wiki. |
+| `2` | `AUTH_ERROR` | Authentication failed; check credentials in the server config. |
+| `3` | `FETCH_ERROR` | Network or API error after retries; check connectivity. |
+| `4` | `CONFIG_ERROR` | Credential env vars not set (`WIKI_BOT_USERNAME` / `WIKI_BOT_PASSWORD`). |
+| `-32602` | `INVALID_PARAMS` | Malformed or expired pagination cursor. |
+
+See [ARCHITECTURE.md](ARCHITECTURE.md#error-contract) for the full invariants.
+
 ## Documentation
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) - design, data flow, parse-vs-offload policy, what may break, future work.

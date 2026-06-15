@@ -239,3 +239,46 @@ class TestAuthFailureErrorShape:
         with pytest.raises(McpError) as exc_info:
             _wrap(_raise_auth)
         assert exc_info.value.error.code == AUTH_ERROR
+
+    def test_exhausted_auth_retries_emit_code_2_through_wrap(self, tmp_path, monkeypatch):
+        """wiki_client.api() exhausting auth retries → AuthError → _wrap() → code 2.
+
+        Simulates _MAX_RETRIES consecutive readapidenied responses so that the
+        retry loop exits with an auth-class APIError as last_exc; the resulting
+        AuthError must reach _wrap() and be mapped to AUTH_ERROR (code 2), not
+        FETCH_ERROR (code 3).
+        """
+        import types
+
+        from mwclient.errors import APIError
+
+        from wg21_wiki_mcp import wiki_client as wc
+        from wg21_wiki_mcp.config import Config, Credentials
+        from wg21_wiki_mcp.server import _wrap
+
+        monkeypatch.setattr(wc.time, "sleep", lambda *_a, **_k: None)
+
+        class AlwaysAuthDeniedSite:
+            connection = types.SimpleNamespace(cookies={})
+
+            def login(self, _u, _p):
+                pass
+
+            def api(self, action, **params):
+                if params.get("meta") == "userinfo":
+                    return {"query": {"userinfo": {"name": "Bot"}}}
+                raise APIError("readapidenied", "denied", [])
+
+        cfg = Config(
+            base_url="https://w.example",
+            bot=Credentials("bot", "Bot@bot", "secret"),
+            user=None,
+            cache_dir=tmp_path / "c",
+        )
+        client = wc.WikiClient(cfg)
+        monkeypatch.setattr(client, "_new_site", lambda: AlwaysAuthDeniedSite())
+        client.login()
+
+        with pytest.raises(McpError) as exc_info:
+            _wrap(client.api, "query", titles="SomePage")
+        assert exc_info.value.error.code == AUTH_ERROR
