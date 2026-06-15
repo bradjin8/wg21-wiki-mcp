@@ -204,13 +204,9 @@ class TestConfigErrorShape:
         ):
             monkeypatch.delenv(var, raising=False)
 
-        try:
+        with pytest.raises(ConfigError) as exc_info:
             Config.from_env(load_env_file=False)
-        except ConfigError as exc:
-            err = to_mcp_error(exc)
-            assert err.error.code == CONFIG_ERROR
-            return
-        pytest.fail("ConfigError was not raised")
+        assert to_mcp_error(exc_info.value).error.code == CONFIG_ERROR
 
 
 # ---------------------------------------------------------------------------
