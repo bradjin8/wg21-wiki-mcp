@@ -17,7 +17,7 @@ from mcp.shared.exceptions import McpError
 from . import tools
 from .config import Config
 from .context import ServerContext
-from .errors import ConfigError, WikiMcpError, to_mcp_error
+from .errors import WikiMcpError, to_mcp_error
 from .models import (
     MeetingList,
     MeetingOverview,
@@ -36,8 +36,9 @@ _T = TypeVar("_T")
 def _wrap(fn: Callable[..., _T], /, *args: Any, **kwargs: Any) -> _T:
     """Call ``fn(*args, **kwargs)`` and convert any domain error to ``McpError``.
 
-    This is the single chokepoint where ``WikiMcpError`` / ``ConfigError`` /
-    raw ``mwclient.APIError`` are mapped to structured ``McpError`` with a
+    This is the single chokepoint where ``WikiMcpError`` subclasses
+    (``AuthError``, ``PageNotFound``, ``FetchError``, ``ConfigError``) and raw
+    ``mwclient.APIError`` are mapped to structured ``McpError`` with a
     distinct, documented code before reaching the MCP transport layer.
     ``McpError`` instances (including cursor ``INVALID_PARAMS``) pass through
     unchanged.
@@ -46,7 +47,7 @@ def _wrap(fn: Callable[..., _T], /, *args: Any, **kwargs: Any) -> _T:
         return fn(*args, **kwargs)
     except McpError:
         raise
-    except (WikiMcpError, ConfigError) as exc:
+    except WikiMcpError as exc:
         raise to_mcp_error(exc) from exc
     except Exception as exc:  # noqa: BLE001 — catch raw APIError and anything else
         raise to_mcp_error(exc) from exc

@@ -14,7 +14,32 @@ from pydantic import BaseModel, Field
 # Error hierarchy re-exported from errors.py for backward compatibility.
 from .errors import AuthError, FetchError, PageNotFound, WikiMcpError
 
-__all__ = ["AuthError", "FetchError", "PageNotFound", "WikiMcpError"]
+__all__ = [
+    # Model classes
+    "BundledPage",
+    "CalendarStatus",
+    "Chunk",
+    "IsoSlot",
+    "MeetingList",
+    "MeetingOverview",
+    "MeetingRef",
+    "NamespaceInfo",
+    "PageContent",
+    "PageList",
+    "PageRef",
+    "Provenance",
+    "RecentChange",
+    "RecentChanges",
+    "SearchHit",
+    "SearchResults",
+    "SessionBundle",
+    "WikiStatus",
+    # Error types (re-exported for backward compatibility)
+    "AuthError",
+    "FetchError",
+    "PageNotFound",
+    "WikiMcpError",
+]
 
 
 class Provenance(BaseModel):

@@ -16,7 +16,18 @@ from pathlib import Path
 # ``from wg21_wiki_mcp.config import ConfigError`` continue to work.
 from .errors import ConfigError
 
-__all__ = ["ConfigError"]
+__all__ = [
+    # Configuration classes
+    "Config",
+    "Credentials",
+    # Constants
+    "DEFAULT_CACHE_DIR_NAME",
+    "DEFAULT_TTL_MEETING_S",
+    "DEFAULT_TTL_NORMAL_S",
+    "WIKI_BASE_URL",
+    # Error type (re-exported for backward compatibility)
+    "ConfigError",
+]
 
 try:  # python-dotenv is optional; absence simply means "no .env convenience".
     from dotenv import load_dotenv as _load_dotenv

@@ -38,6 +38,8 @@ from wg21_wiki_mcp.pagination import decode_cursor
 
 
 class TestToMcpError:
+    """Unit tests for ``to_mcp_error()`` — one test per exception type and edge case."""
+
     def test_page_not_found_maps_to_code_1(self):
         exc = PageNotFound("Page not found: 'Ghost'")
         err = to_mcp_error(exc)
@@ -107,7 +109,7 @@ class TestToMcpError:
 
 
 class TestMissingPageThroughToolBoundary:
-    """Verify get_page raises McpError(PAGE_NOT_FOUND) for a missing page."""
+    """Verify PageNotFound reaches the transport as McpError(PAGE_NOT_FOUND)."""
 
     def test_get_page_missing_raises_mcp_error(self, fake_client, make_ctx):
         from wg21_wiki_mcp import tools
@@ -146,6 +148,8 @@ class TestMissingPageThroughToolBoundary:
 
 
 class TestBadCursorErrorShape:
+    """Verify malformed or expired pagination cursors raise McpError(INVALID_PARAMS)."""
+
     def test_malformed_cursor_raises_invalid_params(self):
         with pytest.raises(McpError) as exc_info:
             decode_cursor("not-valid-base64!!!")
@@ -170,6 +174,8 @@ class TestBadCursorErrorShape:
 
 
 class TestConfigErrorShape:
+    """Verify missing credentials raise ConfigError that maps to McpError(CONFIG_ERROR)."""
+
     def test_config_from_env_raises_config_error_without_credentials(self, monkeypatch):
         """Config.from_env() raises ConfigError when no credentials are set."""
         from wg21_wiki_mcp.config import Config
@@ -187,6 +193,7 @@ class TestConfigErrorShape:
             Config.from_env(load_env_file=False)
 
     def test_config_error_maps_to_code_4(self, monkeypatch):
+        """Config.from_env() raises ConfigError that maps to error code 4."""
         from wg21_wiki_mcp.config import Config
 
         for var in (
@@ -197,13 +204,9 @@ class TestConfigErrorShape:
         ):
             monkeypatch.delenv(var, raising=False)
 
-        try:
+        with pytest.raises(ConfigError) as exc_info:
             Config.from_env(load_env_file=False)
-        except ConfigError as exc:
-            err = to_mcp_error(exc)
-            assert err.error.code == CONFIG_ERROR
-            return
-        pytest.fail("ConfigError was not raised")
+        assert to_mcp_error(exc_info.value).error.code == CONFIG_ERROR
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +215,8 @@ class TestConfigErrorShape:
 
 
 class TestAuthFailureErrorShape:
+    """Verify AuthError maps to McpError(AUTH_ERROR) with a sanitized, fixed message."""
+
     def test_auth_error_maps_to_code_2(self):
         exc = AuthError("All configured credential paths failed: bot: LoginError: bad")
         err = to_mcp_error(exc)

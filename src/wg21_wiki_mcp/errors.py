@@ -55,15 +55,26 @@ class AuthError(WikiMcpError):
 
 
 class PageNotFound(WikiMcpError):
-    """The requested page does not exist on the wiki."""
+    """The requested page does not exist on the wiki.
+
+    The exception message must describe what was searched for (title, section
+    number) and must never include wiki page content.  ``to_mcp_error`` passes
+    the message through as-is; the safety invariant is enforced by caller
+    convention.
+    """
 
 
 class FetchError(WikiMcpError):
     """A network or API error prevented page retrieval after all retries."""
 
 
-class ConfigError(RuntimeError):
-    """Required server configuration is missing or invalid."""
+class ConfigError(WikiMcpError):
+    """Required server configuration is missing or invalid.
+
+    Raised at startup when no credentials are present in the environment.
+    The message always names the env vars to set and never carries credential
+    values.
+    """
 
 
 # ---------------------------------------------------------------------------
