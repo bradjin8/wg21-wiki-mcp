@@ -97,6 +97,27 @@ failure).
 - **Public meetings-page format change.** Would degrade TTL accuracy only
   (conservative fallback keeps data fresh); override via `ISOCPP_WIKI_MEETING_WINDOWS`.
 
+## Error contract
+
+Every domain error is converted to a structured `McpError` / `ErrorData` with a
+distinct code **before** it crosses the tool boundary. The single mapping
+function lives in `errors.py`; `server._wrap()` calls it around every tool
+invocation.
+
+| Code | Name | Meaning |
+|------|------|---------|
+| `1` | `PAGE_NOT_FOUND` | The requested page does not exist on the wiki. |
+| `2` | `AUTH_ERROR` | Authentication failed for every configured credential path. |
+| `3` | `FETCH_ERROR` | A network or API error prevented retrieval after all retries. Raw `mwclient.APIError` that escapes the client layer is wrapped here too. |
+| `4` | `CONFIG_ERROR` | Required server configuration is missing or invalid (credentials env vars not set). |
+| `-32602` | `INVALID_PARAMS` | A pagination cursor is malformed or expired. Defined by the MCP / JSON-RPC protocol layer in `pagination.py`. |
+
+**Safety invariants:**
+- Auth-error messages are fixed strings; they never reflect the underlying
+  login-exception text, which could carry credential-adjacent information.
+- All messages are actionable and contain no wiki page content.
+- `McpError` instances (including `INVALID_PARAMS`) pass through `_wrap` unchanged.
+
 ## Future work
 
 - Attachment/file (PDF) retrieval (currently wikitext pages only).

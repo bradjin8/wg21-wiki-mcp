@@ -12,6 +12,12 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
+# ConfigError re-exported from errors.py; import here so callers that do
+# ``from wg21_wiki_mcp.config import ConfigError`` continue to work.
+from .errors import ConfigError
+
+__all__ = ["ConfigError"]
+
 try:  # python-dotenv is optional; absence simply means "no .env convenience".
     from dotenv import load_dotenv as _load_dotenv
 except ImportError:  # pragma: no cover - dotenv is a normal dependency
@@ -143,7 +149,3 @@ def _env_int(name: str, default: int) -> int:
     except ValueError:
         return default
     return value if value > 0 else default
-
-
-class ConfigError(RuntimeError):
-    """Raised when required configuration is missing or invalid."""

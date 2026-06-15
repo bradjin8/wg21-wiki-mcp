@@ -11,6 +11,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+# Error hierarchy re-exported from errors.py for backward compatibility.
+from .errors import AuthError, FetchError, PageNotFound, WikiMcpError
+
+__all__ = ["AuthError", "FetchError", "PageNotFound", "WikiMcpError"]
+
 
 class Provenance(BaseModel):
     """Identity and verifiable source links for a wiki page revision."""
@@ -196,22 +201,3 @@ class WikiStatus(BaseModel):
     ttl_mode: Literal["normal", "meeting", "conservative"]
     calendar: CalendarStatus
     cache_entries: int | None = None
-
-
-# --- Error hierarchy --------------------------------------------------------
-
-
-class WikiMcpError(RuntimeError):
-    """Base class for all server-raised errors."""
-
-
-class AuthError(WikiMcpError):
-    """Authentication failed for every configured credential path."""
-
-
-class PageNotFound(WikiMcpError):
-    """The requested page does not exist."""
-
-
-class FetchError(WikiMcpError):
-    """A network/API error prevented retrieval after retries."""

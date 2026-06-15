@@ -1,0 +1,138 @@
+"""Centralized error types, codes, and MCP error-contract mapping.
+
+Every domain error that crosses a tool boundary is converted here to a
+structured ``McpError`` / ``ErrorData`` with a distinct, documented code.
+All error messages are safe: they contain no credential values and no wiki
+page content.
+
+Error codes
+-----------
+The JSON-RPC 2.0 spec reserves -32768 to -32000 for transport / protocol
+errors. Application-defined codes are kept in the positive range to make the
+distinction unambiguous.
+
+============== ====  ===========================================
+Name           Code  Meaning
+============== ====  ===========================================
+PAGE_NOT_FOUND    1  The requested page does not exist on the wiki.
+AUTH_ERROR        2  Authentication failed for every configured
+                     credential path; check wiki credentials.
+FETCH_ERROR       3  A network or API error prevented retrieval
+                     after all retries; check connectivity.
+CONFIG_ERROR      4  Required server configuration is missing or
+                     invalid; set the credential env vars.
+============== ====  ===========================================
+
+The cursor / pagination code (``INVALID_PARAMS`` / ``-32602``) is defined in
+``pagination.py`` and is part of the MCP protocol layer, not the domain layer.
+"""
+
+from __future__ import annotations
+
+from mcp.shared.exceptions import McpError
+from mcp.types import ErrorData
+
+# ---------------------------------------------------------------------------
+# Application error codes (positive integers, distinct from JSON-RPC reserved)
+# ---------------------------------------------------------------------------
+
+PAGE_NOT_FOUND: int = 1
+AUTH_ERROR: int = 2
+FETCH_ERROR: int = 3
+CONFIG_ERROR: int = 4
+
+# ---------------------------------------------------------------------------
+# Error hierarchy
+# ---------------------------------------------------------------------------
+
+
+class WikiMcpError(RuntimeError):
+    """Base class for all server-raised domain errors."""
+
+
+class AuthError(WikiMcpError):
+    """Authentication failed for every configured credential path."""
+
+
+class PageNotFound(WikiMcpError):
+    """The requested page does not exist on the wiki."""
+
+
+class FetchError(WikiMcpError):
+    """A network or API error prevented page retrieval after all retries."""
+
+
+class ConfigError(RuntimeError):
+    """Required server configuration is missing or invalid."""
+
+
+# ---------------------------------------------------------------------------
+# Mapping to structured McpError
+# ---------------------------------------------------------------------------
+
+
+def to_mcp_error(exc: BaseException) -> McpError:
+    """Convert any domain or transport exception to a structured ``McpError``.
+
+    Use this at every tool boundary so agents always receive a spec-shaped
+    error with a distinct, documented code.  Error messages are sanitized:
+    they contain no credential values and no wiki page content.
+
+    ``McpError`` instances are returned unchanged so the cursor / pagination
+    layer (``INVALID_PARAMS``) passes through unmodified.
+    """
+    if isinstance(exc, McpError):
+        return exc
+
+    if isinstance(exc, PageNotFound):
+        # str(exc) is always "Page not found: <title>" — user-supplied title,
+        # not confidential content.
+        return McpError(ErrorData(code=PAGE_NOT_FOUND, message=str(exc) or "Page not found."))
+
+    if isinstance(exc, AuthError):
+        # Use a fixed message; the original may contain credential-adjacent
+        # information from the underlying login exception chain.
+        return McpError(
+            ErrorData(
+                code=AUTH_ERROR,
+                message="Authentication failed; verify wiki credentials in the server configuration.",
+            )
+        )
+
+    if isinstance(exc, FetchError):
+        # Use a fixed message; the original includes the mwclient exception
+        # string which, while not containing credentials, is not useful to agents.
+        return McpError(
+            ErrorData(
+                code=FETCH_ERROR,
+                message="Wiki API fetch failed after retries; check connectivity or try again.",
+            )
+        )
+
+    if isinstance(exc, ConfigError):
+        # The ConfigError message names the env vars to set — safe and actionable.
+        return McpError(ErrorData(code=CONFIG_ERROR, message=str(exc) or "Server not configured."))
+
+    # Wrap raw mwclient APIError that escaped the client layer without being
+    # converted to FetchError (non-transient, non-auth error code).
+    try:
+        from mwclient.errors import APIError as _APIError  # local import: optional dep
+
+        if isinstance(exc, _APIError):
+            code_label = getattr(exc, "code", "unknown")
+            return McpError(
+                ErrorData(
+                    code=FETCH_ERROR,
+                    message=f"Wiki API returned an error (code: {code_label}).",
+                )
+            )
+    except ImportError:  # pragma: no cover
+        pass
+
+    # Fallback for any unexpected exception type.
+    return McpError(
+        ErrorData(
+            code=FETCH_ERROR,
+            message="An unexpected server error occurred.",
+        )
+    )
