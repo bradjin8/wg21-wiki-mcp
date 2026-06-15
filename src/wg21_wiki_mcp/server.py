@@ -17,7 +17,7 @@ from mcp.shared.exceptions import McpError
 from . import tools
 from .config import Config
 from .context import ServerContext
-from .errors import WikiMcpError, to_mcp_error
+from .errors import ConfigError, WikiMcpError, to_mcp_error
 from .models import (
     MeetingList,
     MeetingOverview,
@@ -47,7 +47,7 @@ def _wrap(fn: Callable[..., _T], /, *args: Any, **kwargs: Any) -> _T:
         return fn(*args, **kwargs)
     except McpError:
         raise
-    except WikiMcpError as exc:
+    except (WikiMcpError, ConfigError) as exc:
         raise to_mcp_error(exc) from exc
     except Exception as exc:  # noqa: BLE001 — catch raw APIError and anything else
         raise to_mcp_error(exc) from exc
