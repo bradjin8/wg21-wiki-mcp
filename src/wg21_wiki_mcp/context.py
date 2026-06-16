@@ -62,3 +62,9 @@ class ServerContext:
             oldid_url=self.client.oldid_url(outcome.title, outcome.revid),
             from_cache=outcome.from_cache,
         )
+
+    def close(self) -> None:
+        """Release cache, calendar, and wiki client resources."""
+        self.cache.close()
+        self.calendar.close()
+        self.client.close()

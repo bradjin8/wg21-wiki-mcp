@@ -62,6 +62,7 @@ class WikiClient:
         self._site: mwclient.Site | None = None
         self._active: Credentials | None = None
         self._lock = threading.RLock()
+        self._closed = False
 
     # -- properties ---------------------------------------------------------
     @property
@@ -363,3 +364,14 @@ class WikiClient:
     def statistics(self) -> dict:
         """Return the wiki's ``siteinfo`` statistics as the raw response."""
         return self.api("query", meta="siteinfo", siprop="statistics")
+
+    def close(self) -> None:
+        """Close the underlying HTTP session and release the site handle."""
+        if self._closed:
+            return
+        self._closed = True
+        with self._lock:
+            if self._site is not None:
+                self._site.connection.close()
+                self._site = None
+            self._active = None

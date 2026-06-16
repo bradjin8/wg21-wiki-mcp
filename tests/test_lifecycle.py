@@ -1,0 +1,183 @@
+"""Resource lifecycle, shutdown, and observability tests."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import warnings
+from unittest.mock import MagicMock, patch
+
+import pytest
+from conftest import FakeCalendar, FakePage, FakeWikiClient, make_config
+from filelock import Timeout
+
+from wg21_wiki_mcp import server
+from wg21_wiki_mcp.cache import Cache
+from wg21_wiki_mcp.context import ServerContext
+from wg21_wiki_mcp.fetch import PageFetcher
+from wg21_wiki_mcp.meetings import MeetingCalendar
+from wg21_wiki_mcp.tools import wiki_status
+from wg21_wiki_mcp.wiki_client import WikiClient
+
+
+def _ctx(tmp_path) -> ServerContext:
+    client = FakeWikiClient()
+    config = make_config(tmp_path)
+    cache = Cache(config.cache_dir)
+    return ServerContext(
+        config=config,
+        client=client,  # type: ignore[arg-type]
+        calendar=FakeCalendar(),  # type: ignore[arg-type]
+        cache=cache,
+        fetcher=PageFetcher(client, cache),  # type: ignore[arg-type]
+    )
+
+
+def test_cache_close_no_resource_warning(tmp_path):
+    cache = Cache(tmp_path / "c")
+    cache.put(
+        requested_title="X",
+        title="X",
+        redirected_from=None,
+        revid=1,
+        timestamp=None,
+        size=1,
+        content="hi",
+    )
+    cache.get("X")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", ResourceWarning)
+        cache.close()
+        cache.close()
+    assert not any(issubclass(w.category, ResourceWarning) for w in caught)
+
+
+def test_cache_context_manager(tmp_path):
+    with Cache(tmp_path / "c") as cache:
+        cache.put(
+            requested_title="X",
+            title="X",
+            redirected_from=None,
+            revid=1,
+            timestamp=None,
+            size=1,
+            content="hi",
+        )
+    with pytest.raises(RuntimeError, match="closed"):
+        cache.get("X")
+
+
+def test_server_context_close(tmp_path):
+    ctx = _ctx(tmp_path)
+    ctx.cache.get("probe")  # open sqlite on this thread
+    ctx.close()
+    assert ctx.cache._closed is True
+    assert ctx.calendar._closed is True
+    assert ctx.client._closed is True
+
+
+def test_lifespan_closes_context(monkeypatch, tmp_path):
+    ctx = _ctx(tmp_path)
+    closed = False
+    real_close = ctx.close
+
+    def _tracked_close() -> None:
+        nonlocal closed
+        closed = True
+        real_close()
+
+    monkeypatch.setattr(ctx, "close", _tracked_close)
+
+    def _get_ctx() -> ServerContext:
+        server._state["ctx"] = ctx
+        return ctx
+
+    monkeypatch.setattr(server, "get_context", _get_ctx)
+
+    async def run() -> None:
+        async with server._lifespan(server.mcp):
+            pass
+
+    asyncio.run(run())
+    assert closed is True
+    assert "ctx" not in server._state
+
+
+def test_inproc_locks_evicted_after_fetch(tmp_path):
+    client = FakeWikiClient()
+    cache = Cache(tmp_path / "c")
+    fetcher = PageFetcher(client, cache)  # type: ignore[arg-type]
+    for i in range(50):
+        client.pages[f"P{i}"] = FakePage(f"b{i}", i)
+        fetcher.get_page(f"P{i}", ttl_seconds=1000)
+    assert len(fetcher._inproc_locks) == 0
+    cache.close()
+
+
+def test_lock_timeout_logs_warning(tmp_path, caplog):
+    caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp.fetch")
+    client = FakeWikiClient()
+    client.pages["P"] = FakePage("body", 1)
+    cache = Cache(tmp_path / "c")
+    fetcher = PageFetcher(client, cache)  # type: ignore[arg-type]
+
+    with patch("wg21_wiki_mcp.fetch.FileLock") as mock_fl:
+        mock_lock = MagicMock()
+        mock_lock.acquire.side_effect = Timeout("filelock")
+        mock_fl.return_value = mock_lock
+        fetcher.get_page("P", ttl_seconds=1000)
+
+    assert any("lock timeout" in r.message.lower() for r in caplog.records)
+    cache.close()
+
+
+def test_calendar_fetch_failure_logs(tmp_path, caplog):
+    caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp.meetings")
+
+    class _BrokenSession:
+        headers: dict[str, str] = {}
+
+        def get(self, *_a, **_k):
+            raise RuntimeError("network down")
+
+    cal = MeetingCalendar(make_config(tmp_path), session=_BrokenSession())
+    cal.is_meeting_active()
+    assert any("calendar fetch" in r.message.lower() for r in caplog.records)
+
+
+def test_wiki_status_cache_count_failure_logs(make_ctx, fake_client, caplog):
+    caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp.tools")
+    ctx = make_ctx(fake_client)
+
+    def _boom() -> int:
+        raise RuntimeError("db broken")
+
+    ctx.cache.count = _boom  # type: ignore[method-assign]
+    status = wiki_status(ctx)
+    assert status.cache_entries is None
+    assert any("cache count" in r.message.lower() for r in caplog.records)
+
+
+def test_meeting_calendar_close_owned_session(tmp_path):
+    with patch("wg21_wiki_mcp.meetings.requests.Session") as mock_session_cls:
+        session = MagicMock()
+        mock_session_cls.return_value = session
+        cal = MeetingCalendar(make_config(tmp_path))
+        cal.close()
+        session.close.assert_called_once()
+
+
+def test_wiki_client_close(tmp_path):
+    client = WikiClient(make_config(tmp_path))
+    site = MagicMock()
+    client._site = site  # type: ignore[attr-defined]
+    client.close()
+    site.connection.close.assert_called_once()
+    assert client._site is None
+
+
+def test_get_logger_package_name():
+    from wg21_wiki_mcp.log import get_logger
+
+    assert get_logger("wg21_wiki_mcp.fetch").name == "wg21_wiki_mcp.fetch"
+    assert get_logger("fetch").name == "wg21_wiki_mcp.fetch"

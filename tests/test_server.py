@@ -37,7 +37,9 @@ def test_get_context_builds_from_env(monkeypatch, tmp_path):
         assert ctx.config.base_url == "https://wiki.isocpp.org"
         assert server.get_context() is ctx  # cached
     finally:
-        server._state.pop("ctx", None)
+        ctx = server._state.pop("ctx", None)
+        if ctx is not None:
+            ctx.close()
 
 
 def _fake_ctx(tmp_path) -> ServerContext:
@@ -69,11 +71,17 @@ def test_tool_wrappers_delegate(monkeypatch, tmp_path):
     assert server.get_meeting_sessions().meeting == "2026-06 Alpha"
     assert server.get_recent_changes().changes == []
     assert server.wiki_status().authenticated is True
+    ctx.close()
 
 
 def test_lifespan_runs(monkeypatch, tmp_path):
     ctx = _fake_ctx(tmp_path)
-    monkeypatch.setattr(server, "get_context", lambda: ctx)
+
+    def _get_ctx() -> ServerContext:
+        server._state["ctx"] = ctx
+        return ctx
+
+    monkeypatch.setattr(server, "get_context", _get_ctx)
 
     async def run():
         async with server._lifespan(server.mcp):
