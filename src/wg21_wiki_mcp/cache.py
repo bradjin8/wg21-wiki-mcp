@@ -94,9 +94,12 @@ class Cache:
                 check_same_thread=False,
             )
             conn.row_factory = sqlite3.Row
-            self._local.conn = conn
             with self._all_conns_lock:
+                if self._closed:
+                    conn.close()
+                    raise RuntimeError("Cache is closed")
                 self._all_conns.append(conn)
+            self._local.conn = conn
         return conn
 
     def close(self) -> None:

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+
+import pytest
 
 from wg21_wiki_mcp.cache import Cache, title_hash
 
@@ -78,3 +83,41 @@ def test_update_overwrites(tmp_path):
         assert cache.get("X").content == "v2"
         assert cache.get("X").revid == 2
         assert cache.count() == 1
+
+
+def test_connect_after_close_raises(tmp_path):
+    cache = Cache(tmp_path / "c")
+    cache.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        cache.get("nope")
+
+
+def test_close_race_does_not_register_orphan_connection(tmp_path):
+    cache = Cache(tmp_path / "c")
+    gate = threading.Event()
+    result: dict[str, RuntimeError | None] = {"exc": None}
+
+    real_connect = sqlite3.connect
+
+    def gated_connect(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        gate.wait(timeout=5)
+        return conn
+
+    def opener() -> None:
+        try:
+            cache._connect()
+        except RuntimeError as exc:
+            result["exc"] = exc
+
+    with patch("wg21_wiki_mcp.cache.sqlite3.connect", gated_connect):
+        worker = threading.Thread(target=opener)
+        worker.start()
+        cache.close()
+        gate.set()
+        worker.join(timeout=5)
+
+    assert worker.is_alive() is False
+    assert result["exc"] is not None
+    assert "closed" in str(result["exc"]).lower()
+    assert cache._all_conns == []
