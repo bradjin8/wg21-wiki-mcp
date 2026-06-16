@@ -14,6 +14,15 @@ from mcp.types import INVALID_PARAMS
 from wg21_wiki_mcp.pagination import chunk_utf8, decode_cursor, encode_cursor
 
 
+def _decodes_to_valid_dict_cursor(raw: bytes) -> bool:
+    """Return True if ``raw`` is JSON that ``decode_cursor`` would accept as a dict."""
+    try:
+        value = json.loads(raw)
+    except (ValueError, TypeError):
+        return False
+    return isinstance(value, dict)
+
+
 def _reassemble_chunks(text: str, max_bytes: int) -> str:
     """Walk every chunk from ``chunk_utf8`` and join them."""
     pieces: list[str] = []
@@ -76,11 +85,11 @@ def test_cursor_roundtrip_property(payload: dict) -> None:
 
 
 @given(
-    garbage=st.binary(min_size=1, max_size=256),
+    garbage=st.binary(min_size=1, max_size=256).filter(lambda raw: not _decodes_to_valid_dict_cursor(raw)),
 )
 @settings(max_examples=100)
 def test_malformed_cursor_raises_invalid_params(garbage: bytes) -> None:
-    """Random bytes encoded as base64 must yield INVALID_PARAMS or decode safely."""
+    """Random bytes that are not valid dict JSON must raise INVALID_PARAMS."""
     token = base64.urlsafe_b64encode(garbage).decode("ascii")
     with pytest.raises(McpError) as exc_info:
         decode_cursor(token)
@@ -111,8 +120,8 @@ def test_oversized_cursor_token_raises() -> None:
     assert exc.value.error.code == INVALID_PARAMS
 
 
-def test_oversized_cursor_payload_raises() -> None:
-    """A valid encoding of a huge dict still decodes (JSON limit); non-dict is rejected."""
+def test_large_valid_cursor_payload_round_trips() -> None:
+    """A large but valid dict cursor encodes and decodes without error."""
     huge = {"x": "y" * 50_000}
     token = encode_cursor(huge)
     decoded = decode_cursor(token)
