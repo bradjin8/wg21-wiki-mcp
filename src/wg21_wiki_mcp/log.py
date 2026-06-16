@@ -16,6 +16,6 @@ logging.getLogger(_PACKAGE).addHandler(logging.NullHandler())
 
 def get_logger(name: str) -> logging.Logger:
     """Return a child logger under the package namespace."""
-    if name.startswith(_PACKAGE):
+    if name == _PACKAGE or name.startswith(f"{_PACKAGE}."):
         return logging.getLogger(name)
     return logging.getLogger(f"{_PACKAGE}.{name}")

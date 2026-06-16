@@ -48,16 +48,17 @@ class _HttpApiSite:
         return data
 
 
-def _client_with_http_site(tmp_path, monkeypatch) -> wc.WikiClient:
+@pytest.fixture
+def http_api_client(tmp_path, monkeypatch):
     client = wc.WikiClient(_config(tmp_path))
     site = _HttpApiSite()
     monkeypatch.setattr(client, "_new_site", lambda: site)
     client._site = site
     client._active = client._config.bot
-    return client
+    yield client
+    client.close()
 
 
-# --- redirect / normalization adversarial ---------------------------------
 def _make_client(tmp_path, monkeypatch, api_func):
     class _Site:
         def api(self, action, **params):
@@ -153,9 +154,9 @@ def test_long_redirect_chain_terminates(tmp_path, monkeypatch):
 
 # --- responses-backed HTTP adversarial ------------------------------------
 @responses.activate
-def test_api_retries_http_503_sequence(tmp_path, monkeypatch):
+def test_api_retries_http_503_sequence(http_api_client):
     """HTTP 5xx responses trigger retry; a later 200 succeeds."""
-    client = _client_with_http_site(tmp_path, monkeypatch)
+    client = http_api_client
     url = "https://w.example/api.php"
     responses.add(responses.POST, url, status=503)
     responses.add(responses.POST, url, status=502)
@@ -165,19 +166,20 @@ def test_api_retries_http_503_sequence(tmp_path, monkeypatch):
 
 
 @responses.activate
-def test_api_retries_on_timeout(tmp_path, monkeypatch):
+def test_api_retries_on_timeout(http_api_client):
     """Simulated timeout (connection error) is retried deterministically."""
-    client = _client_with_http_site(tmp_path, monkeypatch)
+    client = http_api_client
     url = "https://w.example/api.php"
     responses.add(responses.POST, url, body=requests.exceptions.Timeout("timed out"))
     responses.add(responses.POST, url, json={"query": {"pages": {}}}, status=200)
     assert "query" in client.api("query")
+    assert len(responses.calls) == 2
 
 
 @responses.activate
-def test_api_retries_truncated_json(tmp_path, monkeypatch):
+def test_api_retries_truncated_json(http_api_client):
     """Truncated/garbage API JSON triggers retry via MwClientError."""
-    client = _client_with_http_site(tmp_path, monkeypatch)
+    client = http_api_client
     url = "https://w.example/api.php"
     responses.add(responses.POST, url, body='{"query": {"pa', status=200)
     responses.add(
@@ -192,10 +194,11 @@ def test_api_retries_truncated_json(tmp_path, monkeypatch):
 
 
 @responses.activate
-def test_api_garbage_json_body(tmp_path, monkeypatch):
+def test_api_garbage_json_body(http_api_client):
     """Non-JSON garbage body is retried and eventually succeeds."""
-    client = _client_with_http_site(tmp_path, monkeypatch)
+    client = http_api_client
     url = "https://w.example/api.php"
     responses.add(responses.POST, url, body="not json at all", status=200)
     responses.add(responses.POST, url, json={"done": True}, status=200)
     assert client.api("query") == {"done": True}
+    assert len(responses.calls) == 2
