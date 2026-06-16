@@ -6,6 +6,19 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `errors.py`: centralized error hierarchy (`WikiMcpError`, `AuthError`,
+  `PageNotFound`, `FetchError`, `ConfigError`) with documented application
+  error codes (`PAGE_NOT_FOUND=1`, `AUTH_ERROR=2`, `FETCH_ERROR=3`,
+  `CONFIG_ERROR=4`) and a `to_mcp_error()` mapping function.
+- `server._wrap()`: converts every domain / transport exception to a structured
+  `McpError` / `ErrorData` at the tool boundary; all nine tools go through it.
+- ARCHITECTURE.md "Error contract" section enumerating codes and safety invariants.
+
+### Changed
+- `models.py` and `config.py` re-export their error types from `errors.py`;
+  existing import paths are unchanged.
+
 ## [0.1.0] - 2026-06-12
 
 ### Added

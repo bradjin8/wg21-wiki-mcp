@@ -217,7 +217,9 @@ class WikiClient:
                     last_exc = exc
                     time.sleep(min(2**attempt, 30))
                     continue
-        raise FetchError(f"API call '{action}' failed after {_MAX_RETRIES} retries: {last_exc}")
+        if isinstance(last_exc, APIError) and last_exc.code in _AUTH_ERROR_CODES:
+            raise AuthError(f"Session could not be re-established after {_MAX_RETRIES} attempts.") from last_exc
+        raise FetchError(f"API call '{action}' failed after {_MAX_RETRIES} retries.") from last_exc
 
     # -- URL helpers --------------------------------------------------------
     def canonical_url(self, title: str) -> str:
