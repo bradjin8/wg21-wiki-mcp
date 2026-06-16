@@ -58,6 +58,68 @@ def test_single_flight_dedup(fetcher_stack):
     assert client.fetch_calls == 1  # concurrent callers coalesced into one fetch
 
 
+def test_inproc_lock_retained_while_waiter_pending(fetcher_stack):
+    """A waiting thread must not lose its lock object to a new map entry."""
+    fetcher, client, _ = fetcher_stack
+    client.pages["P"] = FakePage("body", 1)
+
+    inside_fetch = threading.Event()
+    allow_finish = threading.Event()
+    real_fetch = client.fetch_pages
+
+    def gated_fetch(titles: list[str]):
+        inside_fetch.set()
+        assert allow_finish.wait(timeout=5)
+        return real_fetch(titles)
+
+    client.fetch_pages = gated_fetch  # type: ignore[method-assign]
+
+    holder_error: list[BaseException] = []
+    waiter_error: list[BaseException] = []
+
+    def holder() -> None:
+        try:
+            fetcher.get_page("P", ttl_seconds=1000)
+        except BaseException as exc:
+            holder_error.append(exc)
+
+    def waiter() -> None:
+        try:
+            fetcher.get_page("P", ttl_seconds=1000)
+        except BaseException as exc:
+            waiter_error.append(exc)
+
+    holder_thread = threading.Thread(target=holder)
+    holder_thread.start()
+    assert inside_fetch.wait(timeout=5)
+
+    with fetcher._inproc_guard:
+        slot = fetcher._inproc_locks["P"]
+        lock_while_held = slot.lock
+        assert slot.users >= 1
+
+    waiter_thread = threading.Thread(target=waiter)
+    waiter_thread.start()
+
+    # Wait until the waiter has registered on the same in-process slot.
+    for _ in range(100):
+        with fetcher._inproc_guard:
+            slot = fetcher._inproc_locks.get("P")
+            if slot is not None and slot.users >= 2 and slot.lock is lock_while_held:
+                break
+        threading.Event().wait(0.01)
+    else:
+        raise AssertionError("waiter never joined the in-process lock slot")
+
+    allow_finish.set()
+    holder_thread.join(timeout=5)
+    waiter_thread.join(timeout=5)
+
+    assert not holder_error
+    assert not waiter_error
+    assert client.fetch_calls == 1
+
+
 def test_refresh_bypasses_cache(fetcher_stack):
     fetcher, client, _ = fetcher_stack
     client.pages["P"] = FakePage("v1", 1)

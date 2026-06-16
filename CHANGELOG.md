@@ -14,10 +14,30 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `server._wrap()`: converts every domain / transport exception to a structured
   `McpError` / `ErrorData` at the tool boundary; all nine tools go through it.
 - ARCHITECTURE.md "Error contract" section enumerating codes and safety invariants.
+- Adversarial and property-based offline tests (Hypothesis) for pagination
+  cursors, UTF-8 chunking, wikitext slot parsing, and `WikiClient` HTTP/API
+  edge paths; `hypothesis` added to the `dev` extra.
+- `log.py`: library-style stdlib logging with a package `NullHandler`.
+- Resource lifecycle: `Cache.close()` (context-manager supported),
+  `WikiClient.close()`, `MeetingCalendar.close()`, and
+  `ServerContext.close()` orchestrating teardown; wired into the FastMCP
+  lifespan `finally` block.
+- WARNING-level observability for calendar fetch/parse failure, `wiki_status`
+  cache-count failure, and cross-process lock timeout (logs use `title_hash`,
+  not page titles).
+- `tests/test_lifecycle.py`: shutdown, lock-map, and swallowed-path log coverage.
 
 ### Changed
 - `models.py` and `config.py` re-export their error types from `errors.py`;
   existing import paths are unchanged.
+- `PageFetcher` in-process single-flight locks: per-title user refcount with
+  capacity-bounded eviction of idle slots (fixes premature delete-on-release
+  under concurrent fetches of the same title).
+- `WikiClient.close()` is terminal; `login()` / `api()` reject use-after-close.
+- `Cache.close()` guards against a connect/close race that could orphan SQLite
+  connections.
+- `ServerContext.close()` attempts all resource teardown even when one step fails.
+- `types-requests` added to the `dev` extra for mypy parity with CI.
 
 ## [0.1.0] - 2026-06-12
 

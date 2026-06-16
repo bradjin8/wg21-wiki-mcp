@@ -28,6 +28,16 @@ from .wiki_client import FetchedPage, WikiClient
 logger = get_logger("fetch")
 
 _LOCK_TIMEOUT_S = 60
+# Idle in-process lock slots are evicted once the map exceeds this size.
+_MAX_INPROC_LOCK_ENTRIES = 256
+
+
+@dataclass
+class _InprocLockSlot:
+    """Per-title in-process lock with a user count for safe map eviction."""
+
+    lock: threading.Lock
+    users: int = 0
 
 
 @dataclass(frozen=True)
@@ -53,7 +63,7 @@ class PageFetcher:
         """Wrap a wiki client and shared cache behind the single fetch chokepoint."""
         self._client = client
         self._cache = cache
-        self._inproc_locks: dict[str, threading.Lock] = {}
+        self._inproc_locks: dict[str, _InprocLockSlot] = {}
         self._inproc_guard = threading.Lock()
 
     def get_page(self, title: str, *, ttl_seconds: int, refresh: bool = False) -> FetchOutcome:
@@ -153,15 +163,35 @@ class PageFetcher:
     def _acquire_inproc(self, stack: ExitStack, titles: list[str]) -> None:
         for title in titles:
             with self._inproc_guard:
-                lock = self._inproc_locks.setdefault(title, threading.Lock())
+                slot = self._inproc_locks.get(title)
+                if slot is None:
+                    slot = _InprocLockSlot(threading.Lock())
+                    self._inproc_locks[title] = slot
+                slot.users += 1
+                lock = slot.lock
             lock.acquire()
             stack.callback(self._release_inproc, title, lock)
 
     def _release_inproc(self, title: str, lock: threading.Lock) -> None:
         lock.release()
         with self._inproc_guard:
-            if self._inproc_locks.get(title) is lock and not lock.locked():
+            slot = self._inproc_locks.get(title)
+            if slot is None or slot.lock is not lock:
+                return
+            slot.users -= 1
+            if slot.users == 0 and not lock.locked():
                 del self._inproc_locks[title]
+            self._evict_idle_inproc_locks()
+
+    def _evict_idle_inproc_locks(self) -> None:
+        """Drop unused lock slots when the map grows past its capacity bound."""
+        if len(self._inproc_locks) <= _MAX_INPROC_LOCK_ENTRIES:
+            return
+        for key, slot in list(self._inproc_locks.items()):
+            if slot.users == 0 and not slot.lock.locked():
+                del self._inproc_locks[key]
+            if len(self._inproc_locks) <= _MAX_INPROC_LOCK_ENTRIES:
+                return
 
     def _acquire_cross_process(self, stack: ExitStack, titles: list[str]) -> None:
         for title in titles:
