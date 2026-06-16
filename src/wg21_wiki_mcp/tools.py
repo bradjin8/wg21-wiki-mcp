@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 
 from .context import ServerContext
+from .log import get_logger
 from .models import (
     BundledPage,
     Chunk,
@@ -33,6 +34,8 @@ from .models import (
 )
 from .pagination import chunk_utf8, decode_cursor, encode_cursor
 from .wikitext import extract_iso_slots, has_agenda_signal
+
+logger = get_logger("tools")
 
 _MEETING_TITLE_RE = re.compile(r"^\d{4}-\d{2} .+$")
 _DEFAULT_PAGE_MAX_BYTES = 48 * 1024
@@ -390,7 +393,12 @@ def wiki_status(ctx: ServerContext) -> WikiStatus:
     calendar = ctx.calendar.status()
     try:
         cache_entries: int | None = ctx.cache.count()
-    except Exception:  # noqa: BLE001 - status must never fail hard
+    except Exception as exc:  # noqa: BLE001 - status must never fail hard
+        logger.warning(
+            "Cache count failed: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
         cache_entries = None
     return WikiStatus(
         base_url=ctx.config.base_url,

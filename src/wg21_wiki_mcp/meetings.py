@@ -17,7 +17,10 @@ from datetime import date, datetime, timedelta, timezone
 import requests
 
 from .config import Config
+from .log import get_logger
 from .models import CalendarStatus
+
+logger = get_logger("meetings")
 
 PUBLIC_MEETINGS_URL = "https://isocpp.org/std/meetings-and-participation/upcoming-meetings"
 
@@ -78,6 +81,8 @@ class MeetingCalendar:
         self._windows: list[tuple[date, date]] = []
         self._last_fetched: datetime | None = None
         self._parse_status: str = "failed"
+        self._owns_session = session is None
+        self._closed = False
 
     def _today(self) -> date:
         return datetime.now(timezone.utc).date()
@@ -93,7 +98,12 @@ class MeetingCalendar:
                 resp.raise_for_status()
                 self._windows = parse_meeting_windows(resp.text)
                 self._parse_status = "ok" if self._windows else "partial"
-            except Exception:  # noqa: BLE001 - network/parse failure -> conservative
+            except Exception as exc:  # noqa: BLE001 - network/parse failure -> conservative
+                logger.warning(
+                    "Calendar fetch/parse failed: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
                 self._parse_status = "failed"
             finally:
                 self._last_fetched = now
@@ -141,3 +151,11 @@ class MeetingCalendar:
             in_meeting_window_now=self.is_meeting_active(),
             windows=[f"{s.isoformat()}/{e.isoformat()}" for s, e in windows],
         )
+
+    def close(self) -> None:
+        """Close the HTTP session when this calendar owns it."""
+        if self._closed:
+            return
+        self._closed = True
+        if self._owns_session and hasattr(self._session, "close"):
+            self._session.close()

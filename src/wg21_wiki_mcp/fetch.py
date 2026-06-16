@@ -15,15 +15,17 @@ re-login, and load control. Cache-missing fetches are:
 from __future__ import annotations
 
 import threading
-from collections import defaultdict
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from filelock import FileLock, Timeout
 
-from .cache import Cache, CacheEntry
+from .cache import Cache, CacheEntry, title_hash
+from .log import get_logger
 from .wiki_client import FetchedPage, WikiClient
+
+logger = get_logger("fetch")
 
 _LOCK_TIMEOUT_S = 60
 
@@ -51,7 +53,7 @@ class PageFetcher:
         """Wrap a wiki client and shared cache behind the single fetch chokepoint."""
         self._client = client
         self._cache = cache
-        self._inproc_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
+        self._inproc_locks: dict[str, threading.Lock] = {}
         self._inproc_guard = threading.Lock()
 
     def get_page(self, title: str, *, ttl_seconds: int, refresh: bool = False) -> FetchOutcome:
@@ -151,9 +153,15 @@ class PageFetcher:
     def _acquire_inproc(self, stack: ExitStack, titles: list[str]) -> None:
         for title in titles:
             with self._inproc_guard:
-                lock = self._inproc_locks[title]
+                lock = self._inproc_locks.setdefault(title, threading.Lock())
             lock.acquire()
-            stack.callback(lock.release)
+            stack.callback(self._release_inproc, title, lock)
+
+    def _release_inproc(self, title: str, lock: threading.Lock) -> None:
+        lock.release()
+        with self._inproc_guard:
+            if self._inproc_locks.get(title) is lock and not lock.locked():
+                del self._inproc_locks[title]
 
     def _acquire_cross_process(self, stack: ExitStack, titles: list[str]) -> None:
         for title in titles:
@@ -161,10 +169,16 @@ class PageFetcher:
             try:
                 lock.acquire(timeout=_LOCK_TIMEOUT_S)
                 stack.enter_context(_released(lock))
-            except Timeout:
+            except Timeout as exc:
                 # Another process is taking unusually long; proceed without the
                 # cross-process lock rather than hang. The re-check after this
                 # still prevents redundant work in the common case.
+                logger.warning(
+                    "Cross-process lock timeout (title_hash=%s): %s: %s",
+                    title_hash(title),
+                    type(exc).__name__,
+                    exc,
+                )
                 continue
 
 
