@@ -12,6 +12,7 @@ import re
 
 from .context import ServerContext
 from .log import get_logger
+from .log_safety import safe_exception_summary
 from .models import (
     BundledPage,
     Chunk,
@@ -395,9 +396,8 @@ def wiki_status(ctx: ServerContext) -> WikiStatus:
         cache_entries: int | None = ctx.cache.count()
     except Exception as exc:  # noqa: BLE001 - status must never fail hard
         logger.warning(
-            "Cache count failed: %s: %s",
-            type(exc).__name__,
-            exc,
+            "Cache count failed: %s",
+            safe_exception_summary(exc),
         )
         cache_entries = None
     return WikiStatus(

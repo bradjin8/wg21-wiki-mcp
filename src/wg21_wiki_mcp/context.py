@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from .cache import Cache
 from .config import Config
 from .fetch import FetchOutcome, PageFetcher
+from .log_safety import register_config_secrets
 from .meetings import MeetingCalendar
 from .models import Provenance
 from .wiki_client import WikiClient
@@ -30,6 +31,7 @@ class ServerContext:
     @classmethod
     def create(cls, config: Config) -> ServerContext:
         """Build a context from config (no network until first use)."""
+        register_config_secrets(config)
         client = WikiClient(config)
         cache = Cache(config.cache_dir)
         return cls(

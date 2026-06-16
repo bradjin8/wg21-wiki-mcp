@@ -28,6 +28,34 @@ project treats all wiki content as confidential:
 Tool output returned to an authenticated user may contain wiki content (they
 already have wiki access); logs and committed artifacts must not.
 
+## Log redaction guarantee
+
+Logging uses the stdlib `logging` module (`wg21_wiki_mcp.log`). A centralized
+redaction layer (`wg21_wiki_mcp.log_safety`) scrubs every log record before it
+reaches a handler:
+
+- Credential passwords from the active configuration are registered at startup
+  and replaced with `[REDACTED]` if they ever appear in a log message.
+- Common credential-like patterns (`password=…`, `token=…`, etc.) are redacted
+  even when not pre-registered.
+- Log call sites use safe exception summaries (exception type + sanitized
+  message) and never include page titles or wikitext. Lock contention logs use
+  a content-free title hash, not the title itself.
+
+`AuthError` and other domain error messages are built without upstream exception
+text, so authentication failures cannot carry credential material or IdP HTML into
+tool errors or logs.
+
+Offline tests assert that registered secrets and sample wiki content never appear
+in captured log output (`caplog`).
+
+## Committed-secret scanning
+
+Every pull request runs [Gitleaks](https://github.com/gitleaks/gitleaks) in CI
+(`.github/workflows/ci.yml`). The job fails if a high-confidence secret is
+detected in the repository history reachable from the PR branch. This complements
+the runtime redaction layer: secrets must neither leak at runtime nor be committed.
+
 ## Reporting a vulnerability
 
 Please report suspected vulnerabilities privately to the maintainers via a

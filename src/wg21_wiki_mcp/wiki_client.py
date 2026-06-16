@@ -23,6 +23,7 @@ import mwclient
 from mwclient.errors import APIError, MwClientError
 
 from .config import Config, Credentials
+from .log_safety import auth_path_failure_label, summarize_auth_failures
 from .models import AuthError, FetchError
 
 _AUTH_ERROR_CODES = frozenset({"readapidenied", "assertuserfailed", "notloggedin", "badtoken"})
@@ -89,15 +90,15 @@ class WikiClient:
         """
         with self._lock:
             self._require_open()
-            errors: list[str] = []
+            path_failures: list[str] = []
             for cred in self._config.ordered_credentials:
                 try:
                     self._login_with(cred)
                     self._active = cred
                     return
                 except Exception as exc:  # noqa: BLE001 - record and try next path
-                    errors.append(f"{cred.label}: {type(exc).__name__}: {exc}")
-            raise AuthError("All configured credential paths failed: " + "; ".join(errors))
+                    path_failures.append(auth_path_failure_label(cred.label, exc))
+            raise AuthError(summarize_auth_failures(path_failures))
 
     def _relogin(self) -> None:
         """Re-run only the pinned credential path (no re-probing)."""
