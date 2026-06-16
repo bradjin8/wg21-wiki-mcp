@@ -76,6 +76,19 @@ def test_server_context_close(tmp_path):
     assert ctx.client._closed is True
 
 
+def test_server_context_close_continues_after_failure(tmp_path):
+    ctx = _ctx(tmp_path)
+
+    def _boom() -> None:
+        raise RuntimeError("cache close failed")
+
+    ctx.cache.close = _boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="cache close failed"):
+        ctx.close()
+    assert ctx.calendar._closed is True
+    assert ctx.client._closed is True
+
+
 def test_lifespan_closes_context(monkeypatch, tmp_path):
     ctx = _ctx(tmp_path)
     closed = False
