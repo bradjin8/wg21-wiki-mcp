@@ -189,6 +189,15 @@ def test_wiki_client_close(tmp_path):
     assert client._site is None
 
 
+def test_wiki_client_use_after_close_raises(tmp_path):
+    client = WikiClient(make_config(tmp_path))
+    client.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        client.login()
+    with pytest.raises(RuntimeError, match="closed"):
+        client.api("query", meta="siteinfo")
+
+
 def test_get_logger_package_name():
     from wg21_wiki_mcp.log import get_logger
 

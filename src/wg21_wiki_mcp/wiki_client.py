@@ -64,6 +64,10 @@ class WikiClient:
         self._lock = threading.RLock()
         self._closed = False
 
+    def _require_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("WikiClient is closed")
+
     # -- properties ---------------------------------------------------------
     @property
     def active_label(self) -> str | None:
@@ -81,8 +85,10 @@ class WikiClient:
 
         Raises:
             AuthError: if no configured credential path can log in.
+            RuntimeError: if the client has been closed.
         """
         with self._lock:
+            self._require_open()
             errors: list[str] = []
             for cred in self._config.ordered_credentials:
                 try:
@@ -199,6 +205,7 @@ class WikiClient:
         last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES):
             with self._lock:
+                self._require_open()
                 if self._site is None:
                     self.login()
                 assert self._site is not None  # login() sets the site or raises
