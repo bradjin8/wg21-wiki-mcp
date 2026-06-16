@@ -203,3 +203,4 @@ def test_get_logger_package_name():
 
     assert get_logger("wg21_wiki_mcp.fetch").name == "wg21_wiki_mcp.fetch"
     assert get_logger("fetch").name == "wg21_wiki_mcp.fetch"
+    assert get_logger("wg21_wiki_mcp_other").name == "wg21_wiki_mcp.wg21_wiki_mcp_other"

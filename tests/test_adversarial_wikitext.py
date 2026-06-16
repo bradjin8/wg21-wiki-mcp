@@ -65,7 +65,7 @@ def test_random_wrappers_never_raise(prefix: str, suffix: str) -> None:
     """Arbitrary surrounding text never causes extract_iso_slots to raise."""
     wikitext = prefix + 'id="agenda"' + suffix
     _parse_safely(wikitext)
-    has_agenda_signal(wikitext)
+    assert isinstance(has_agenda_signal(wikitext), bool)
 
 
 def test_has_agenda_signal_adversarial() -> None:
