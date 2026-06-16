@@ -56,9 +56,9 @@ Every pull request runs [Gitleaks](https://github.com/gitleaks/gitleaks) in CI
 `gitleaks-action` wrapper: that action requires a `GITLEAKS_LICENSE` repository
 secret for organization-owned repos (free keys are available at
 [gitleaks.io](https://gitleaks.io/products)). Running the CLI directly provides
-the same scan coverage with no license key. The job fails if a high-confidence
-secret is detected in commits reachable from the PR branch. This complements the
-runtime redaction layer: secrets must neither leak at runtime nor be committed.
+the same scan coverage with no license key. The job fails on any detected secret
+in commits reachable from the PR branch (the CLI invocation applies no confidence
+filter). This complements the runtime redaction layer: secrets must neither leak at runtime nor be committed.
 
 ## Reporting a vulnerability
 
