@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import warnings
 from unittest.mock import MagicMock, patch
 
@@ -164,6 +165,70 @@ def test_inproc_lock_capacity_eviction(tmp_path, monkeypatch):
         fetcher.get_page(title, ttl_seconds=1000)
 
     assert len(fetcher._inproc_locks) <= 1
+    cache.close()
+
+
+def test_inproc_lock_single_flight_under_slow_fetch(tmp_path):
+    """Concurrent get_page on one title during a slow fetch coalesces to one network call."""
+    client = FakeWikiClient()
+    client.pages["P"] = FakePage("body", 1)
+    cache = Cache(tmp_path / "c")
+    fetcher = PageFetcher(client, cache)  # type: ignore[arg-type]
+
+    inside_fetch = threading.Event()
+    allow_finish = threading.Event()
+    real_fetch = client.fetch_pages
+
+    def gated_fetch(titles: list[str]):
+        inside_fetch.set()
+        assert allow_finish.wait(timeout=5)
+        return real_fetch(titles)
+
+    client.fetch_pages = gated_fetch  # type: ignore[method-assign]
+
+    holder_error: list[BaseException] = []
+    waiter_error: list[BaseException] = []
+
+    def holder() -> None:
+        try:
+            fetcher.get_page("P", ttl_seconds=1000)
+        except BaseException as exc:
+            holder_error.append(exc)
+
+    def waiter() -> None:
+        try:
+            fetcher.get_page("P", ttl_seconds=1000)
+        except BaseException as exc:
+            waiter_error.append(exc)
+
+    holder_thread = threading.Thread(target=holder)
+    holder_thread.start()
+    assert inside_fetch.wait(timeout=5)
+
+    with fetcher._inproc_guard:
+        slot = fetcher._inproc_locks["P"]
+        lock_while_held = slot.lock
+        assert slot.users >= 1
+
+    waiter_thread = threading.Thread(target=waiter)
+    waiter_thread.start()
+
+    for _ in range(100):
+        with fetcher._inproc_guard:
+            slot = fetcher._inproc_locks.get("P")
+            if slot is not None and slot.users >= 2 and slot.lock is lock_while_held:
+                break
+        threading.Event().wait(0.01)
+    else:
+        raise AssertionError("waiter never joined the in-process lock slot")
+
+    allow_finish.set()
+    holder_thread.join(timeout=5)
+    waiter_thread.join(timeout=5)
+
+    assert not holder_error
+    assert not waiter_error
+    assert client.fetch_calls == 1
     cache.close()
 
 
