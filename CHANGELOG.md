@@ -28,6 +28,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cache-count failure, and cross-process lock timeout (logs use `title_hash`,
   not page titles).
 - `tests/test_lifecycle.py`: shutdown, lock-map, and swallowed-path log coverage.
+- `PageFetcher.get_page_section()`: section reads use section-aware cache keys
+  and the same cache-first / single-flight path as full-page fetches.
+- SAML/SSO offline tests (`tests/test_wiki_client_saml.py`) with synthetic HTML
+  fixtures under `tests/fixtures/saml/` and `responses`-mocked HTTP flows.
+- CONTRIBUTING.md section on testing bot-password vs user SSO auth paths.
 
 ### Changed
 - `models.py` and `config.py` re-export their error types from `errors.py`;
@@ -39,6 +44,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Cache.close()` guards against a connect/close race that could orphan SQLite
   connections.
 - `ServerContext.close()` attempts all resource teardown even when one step fails.
+- `get_page(section=...)` routes through `PageFetcher` instead of calling the
+  wiki client directly, restoring the architectural fetch chokepoint invariant.
 - `types-requests` added to the `dev` extra for mypy parity with CI.
 
 ## [0.1.0] - 2026-06-12

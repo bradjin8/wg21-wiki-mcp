@@ -25,7 +25,6 @@ from .models import (
     PageList,
     PageNotFound,
     PageRef,
-    Provenance,
     RecentChange,
     RecentChanges,
     SearchHit,
@@ -107,13 +106,20 @@ def get_page(
     start = int(decode_cursor(cursor).get("o", 0))
 
     if section is not None:
-        prov, content = _fetch_section(ctx, title, section)
+        outcome = ctx.fetcher.get_page_section(
+            title,
+            section,
+            ttl_seconds=ctx.current_ttl(),
+            refresh=refresh,
+        )
     else:
         outcome = ctx.fetcher.get_page(title, ttl_seconds=ctx.current_ttl(), refresh=refresh)
-        if outcome.missing or outcome.content is None:
-            raise PageNotFound(f"Page not found: {title!r}")
-        prov = ctx.provenance(outcome)
-        content = outcome.content
+    if outcome.missing or outcome.content is None:
+        if section is not None:
+            raise PageNotFound(f"Page or section not found: {title!r} section {section}")
+        raise PageNotFound(f"Page not found: {title!r}")
+    prov = ctx.provenance(outcome)
+    content = outcome.content
 
     chunk_text, byte_start, byte_end, total, has_more = chunk_utf8(content, start=start, max_bytes=max_bytes)
     next_cursor = encode_cursor({"o": byte_end}) if has_more else None
@@ -129,42 +135,6 @@ def get_page(
             next_cursor=next_cursor,
         ),
     )
-
-
-def _fetch_section(ctx: ServerContext, title: str, section: int) -> tuple[Provenance, str]:
-    """Fetch a single section's verbatim wikitext via the API (server-side split)."""
-    from datetime import datetime, timezone
-
-    resp = ctx.client.api(
-        "query",
-        titles=title,
-        prop="revisions",
-        rvprop="content|ids|timestamp",
-        rvslots="main",
-        rvsection=section,
-        redirects=1,
-    )
-    query = resp.get("query", {})
-    pages = list(query.get("pages", {}).values())
-    if not pages or "missing" in pages[0] or "revisions" not in pages[0]:
-        raise PageNotFound(f"Page or section not found: {title!r} section {section}")
-    page = pages[0]
-    rev = page["revisions"][0]
-    slot = rev.get("slots", {}).get("main", rev)
-    redirects = {r["from"]: r["to"] for r in query.get("redirects", [])}
-    redirected_from = next((src for src, dst in redirects.items() if dst == page["title"]), None)
-    prov = Provenance(
-        requested_title=title,
-        title=page["title"],
-        redirected_from=redirected_from,
-        revid=rev.get("revid"),
-        last_modified=rev.get("timestamp"),
-        fetched_at=datetime.now(timezone.utc).isoformat(),
-        url=ctx.client.canonical_url(page["title"]),
-        oldid_url=ctx.client.oldid_url(page["title"], rev.get("revid")),
-        from_cache=False,
-    )
-    return prov, slot.get("*", "")
 
 
 # --------------------------------------------------------------------------- #

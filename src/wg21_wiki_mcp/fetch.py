@@ -31,6 +31,12 @@ logger = get_logger("fetch")
 _LOCK_TIMEOUT_S = 60
 # Idle in-process lock slots are evicted once the map exceeds this size.
 _MAX_INPROC_LOCK_ENTRIES = 256
+_SECTION_KEY_SEP = "\0section="
+
+
+def section_cache_key(title: str, section: int) -> str:
+    """Return the cache/lock key for a page section (distinct from full-page keys)."""
+    return f"{title}{_SECTION_KEY_SEP}{section}"
 
 
 @dataclass
@@ -70,6 +76,57 @@ class PageFetcher:
     def get_page(self, title: str, *, ttl_seconds: int, refresh: bool = False) -> FetchOutcome:
         """Resolve a single page (cache-first, then fetch). See :meth:`get_pages`."""
         return self.get_pages([title], ttl_seconds=ttl_seconds, refresh=refresh)[title]
+
+    def get_page_section(
+        self,
+        title: str,
+        section: int,
+        *,
+        ttl_seconds: int,
+        refresh: bool = False,
+    ) -> FetchOutcome:
+        """Resolve one page section (cache-first, then ``rvsection`` fetch)."""
+        key = section_cache_key(title, section)
+        now = datetime.now(timezone.utc)
+        entry = None if refresh else self._cache.get(key)
+        if entry is not None and entry.age_seconds(now) < ttl_seconds:
+            return _section_outcome(_from_entry(entry, from_cache=True), title)
+
+        stale = entry
+        with ExitStack() as stack:
+            self._acquire_inproc(stack, [key])
+            self._acquire_cross_process(stack, [key])
+
+            if not refresh:
+                entry = self._cache.get(key)
+                if entry is not None and entry.age_seconds() < ttl_seconds:
+                    return _section_outcome(_from_entry(entry, from_cache=True), title)
+                if entry is not None:
+                    stale = entry
+
+            if stale is not None and not refresh and stale.revid is not None:
+                current = self._client.page_revisions([title])
+                if current.get(title) is not None and current[title] == stale.revid:
+                    self._cache.touch(key)
+                    refreshed = self._cache.get(key) or stale
+                    return _section_outcome(_from_entry(refreshed, from_cache=True), title)
+
+            fetched_at = datetime.now(timezone.utc).isoformat()
+            page = self._client.fetch_page_section(title, section)
+            if page.missing or page.content is None:
+                return _section_outcome(_missing(title, page, fetched_at), title)
+
+            entry = self._cache.put(
+                requested_title=key,
+                title=page.title,
+                redirected_from=page.redirected_from,
+                revid=page.revid,
+                timestamp=page.timestamp,
+                size=page.size,
+                content=page.content,
+                fetched_at=fetched_at,
+            )
+            return _section_outcome(_from_entry(entry, from_cache=False), title)
 
     def get_pages(self, titles: list[str], *, ttl_seconds: int, refresh: bool = False) -> dict[str, FetchOutcome]:
         """Resolve many titles at once, cache-first then batched network fetch."""
@@ -237,6 +294,22 @@ def _from_entry(entry: CacheEntry, *, from_cache: bool) -> FetchOutcome:
         fetched_at=entry.fetched_at,
         from_cache=from_cache,
         missing=False,
+    )
+
+
+def _section_outcome(outcome: FetchOutcome, title: str) -> FetchOutcome:
+    """Restore the caller's page title (cache keys embed the section suffix)."""
+    return FetchOutcome(
+        requested_title=title,
+        title=outcome.title,
+        redirected_from=outcome.redirected_from,
+        revid=outcome.revid,
+        timestamp=outcome.timestamp,
+        size=outcome.size,
+        content=outcome.content,
+        fetched_at=outcome.fetched_at,
+        from_cache=outcome.from_cache,
+        missing=outcome.missing,
     )
 
 

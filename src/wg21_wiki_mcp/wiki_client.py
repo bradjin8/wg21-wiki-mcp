@@ -306,6 +306,20 @@ class WikiClient:
             )
         return out
 
+    def fetch_page_section(self, title: str, section: int) -> FetchedPage:
+        """Fetch one section's verbatim wikitext (server-side ``rvsection`` split)."""
+        resp = self.api(
+            "query",
+            titles=title,
+            prop="revisions",
+            rvprop="ids|timestamp|size|content",
+            rvslots="main",
+            rvsection=section,
+            redirects=1,
+        )
+        mapped = self._map_batch([title], resp.get("query", {}))
+        return mapped.get(title) or FetchedPage(title, title, None, None, None, None, None, True)
+
     def page_revisions(self, titles: list[str]) -> dict[str, int | None]:
         """Cheaply fetch current revids (for cache revalidation)."""
         out: dict[str, int | None] = {}

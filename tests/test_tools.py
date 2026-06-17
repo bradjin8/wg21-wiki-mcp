@@ -96,6 +96,15 @@ def test_get_page_section(fake_client, make_ctx):
     assert page.section == 1
     assert "section 1" in page.content
     assert page.provenance.revid == 3
+    assert fake_client.section_fetch_calls == 1
+
+
+def test_get_page_section_cached(fake_client, make_ctx):
+    fake_client.pages["P"] = FakePage("whole", 3)
+    ctx = make_ctx(fake_client)
+    tools.get_page(ctx, "P", section=1)
+    tools.get_page(ctx, "P", section=1)
+    assert fake_client.section_fetch_calls == 1
 
 
 def test_get_page_section_not_found(fake_client, make_ctx):

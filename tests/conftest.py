@@ -44,6 +44,7 @@ class FakeWikiClient:
         self.allpages: list[dict] = []
         self.fetch_calls = 0
         self.fetch_title_batches: list[list[str]] = []
+        self.section_fetch_calls = 0
         self.revision_calls = 0
         self._active = "bot"
         self._user = "TestBot@ci"
@@ -106,6 +107,24 @@ class FakeWikiClient:
             )
         return out
 
+    def fetch_page_section(self, title: str, section: int) -> FetchedPage:
+        self.section_fetch_calls += 1
+        final, redirected_from = self._resolve(title)
+        page = self.pages.get(final)
+        if page is None:
+            return FetchedPage(title, final, redirected_from, None, None, None, None, True)
+        body = f"== section {section} ==\n{page.content}"
+        return FetchedPage(
+            requested_title=title,
+            title=final,
+            redirected_from=redirected_from,
+            revid=page.revid,
+            timestamp=page.timestamp,
+            size=len(body.encode("utf-8")),
+            content=body,
+            missing=False,
+        )
+
     def page_revisions(self, titles: list[str]) -> dict[str, int | None]:
         self.revision_calls += 1
         out: dict[str, int | None] = {}
@@ -147,30 +166,6 @@ class FakeWikiClient:
 
     def statistics(self) -> dict:  # pragma: no cover - unused by tests
         return {"query": {"statistics": {"pages": len(self.pages)}}}
-
-    def api(self, action: str, **params: object) -> dict:
-        # Only used by get_page section retrieval (rvsection).
-        title = str(params.get("titles"))
-        final, redirected_from = self._resolve(title)
-        page = self.pages.get(final)
-        if page is None:
-            return {"query": {"pages": {"-1": {"title": final, "missing": ""}}}}
-        section = int(params.get("rvsection", 0))
-        body = f"== section {section} ==\n{page.content}"
-        rds = [{"from": k, "to": v} for k, v in self.redirects.items()]
-        return {
-            "query": {
-                "redirects": rds,
-                "pages": {
-                    "1": {
-                        "title": final,
-                        "revisions": [
-                            {"revid": page.revid, "timestamp": page.timestamp, "slots": {"main": {"*": body}}}
-                        ],
-                    }
-                },
-            }
-        }
 
 
 @dataclass
