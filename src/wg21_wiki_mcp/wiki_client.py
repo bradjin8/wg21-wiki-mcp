@@ -62,6 +62,11 @@ class WikiClient:
         self._site: mwclient.Site | None = None
         self._active: Credentials | None = None
         self._lock = threading.RLock()
+        self._closed = False
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("WikiClient is closed")
 
     # -- properties ---------------------------------------------------------
     @property
@@ -80,8 +85,10 @@ class WikiClient:
 
         Raises:
             AuthError: if no configured credential path can log in.
+            RuntimeError: if the client has been closed.
         """
         with self._lock:
+            self._require_open()
             errors: list[str] = []
             for cred in self._config.ordered_credentials:
                 try:
@@ -198,6 +205,7 @@ class WikiClient:
         last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES):
             with self._lock:
+                self._require_open()
                 if self._site is None:
                     self.login()
                 assert self._site is not None  # login() sets the site or raises
@@ -363,3 +371,14 @@ class WikiClient:
     def statistics(self) -> dict:
         """Return the wiki's ``siteinfo`` statistics as the raw response."""
         return self.api("query", meta="siteinfo", siprop="statistics")
+
+    def close(self) -> None:
+        """Close the underlying HTTP session and release the site handle."""
+        if self._closed:
+            return
+        self._closed = True
+        with self._lock:
+            if self._site is not None:
+                self._site.connection.close()
+                self._site = None
+            self._active = None

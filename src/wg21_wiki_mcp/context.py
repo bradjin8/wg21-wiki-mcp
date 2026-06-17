@@ -62,3 +62,24 @@ class ServerContext:
             oldid_url=self.client.oldid_url(outcome.title, outcome.revid),
             from_cache=outcome.from_cache,
         )
+
+    def close(self) -> None:
+        """Release cache, calendar, and wiki client resources."""
+        first_error: BaseException | None = None
+        try:
+            self.cache.close()
+        except BaseException as exc:
+            if first_error is None:
+                first_error = exc
+        try:
+            self.calendar.close()
+        except BaseException as exc:
+            if first_error is None:
+                first_error = exc
+        try:
+            self.client.close()
+        except BaseException as exc:
+            if first_error is None:
+                first_error = exc
+        if first_error is not None:
+            raise first_error

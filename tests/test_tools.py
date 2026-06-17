@@ -182,6 +182,12 @@ def test_meeting_overview(fake_client, make_ctx):
     assert "Unrelated" not in out_titles  # filtered to meeting subpages
 
 
+def test_meeting_overview_no_meetings_raises(fake_client, make_ctx):
+    ctx = make_ctx(fake_client)
+    with pytest.raises(PageNotFound, match="No meeting namespaces"):
+        tools.get_meeting_overview(ctx)
+
+
 # --- session bundle -------------------------------------------------------
 def test_session_bundle(fake_client, make_ctx):
     agenda = (

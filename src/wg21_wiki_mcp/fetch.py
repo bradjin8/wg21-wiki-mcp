@@ -15,17 +15,29 @@ re-login, and load control. Cache-missing fetches are:
 from __future__ import annotations
 
 import threading
-from collections import defaultdict
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from filelock import FileLock, Timeout
 
-from .cache import Cache, CacheEntry
+from .cache import Cache, CacheEntry, title_hash
+from .log import get_logger
 from .wiki_client import FetchedPage, WikiClient
 
+logger = get_logger("fetch")
+
 _LOCK_TIMEOUT_S = 60
+# Idle in-process lock slots are evicted once the map exceeds this size.
+_MAX_INPROC_LOCK_ENTRIES = 256
+
+
+@dataclass
+class _InprocLockSlot:
+    """Per-title in-process lock with a user count for safe map eviction."""
+
+    lock: threading.Lock
+    users: int = 0
 
 
 @dataclass(frozen=True)
@@ -51,7 +63,7 @@ class PageFetcher:
         """Wrap a wiki client and shared cache behind the single fetch chokepoint."""
         self._client = client
         self._cache = cache
-        self._inproc_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
+        self._inproc_locks: dict[str, _InprocLockSlot] = {}
         self._inproc_guard = threading.Lock()
 
     def get_page(self, title: str, *, ttl_seconds: int, refresh: bool = False) -> FetchOutcome:
@@ -151,9 +163,35 @@ class PageFetcher:
     def _acquire_inproc(self, stack: ExitStack, titles: list[str]) -> None:
         for title in titles:
             with self._inproc_guard:
-                lock = self._inproc_locks[title]
+                slot = self._inproc_locks.get(title)
+                if slot is None:
+                    slot = _InprocLockSlot(threading.Lock())
+                    self._inproc_locks[title] = slot
+                slot.users += 1
+                lock = slot.lock
             lock.acquire()
-            stack.callback(lock.release)
+            stack.callback(self._release_inproc, title, lock)
+
+    def _release_inproc(self, title: str, lock: threading.Lock) -> None:
+        lock.release()
+        with self._inproc_guard:
+            slot = self._inproc_locks.get(title)
+            if slot is None or slot.lock is not lock:
+                return
+            slot.users -= 1
+            if slot.users == 0 and not lock.locked():
+                del self._inproc_locks[title]
+            self._evict_idle_inproc_locks()
+
+    def _evict_idle_inproc_locks(self) -> None:
+        """Drop unused lock slots when the map grows past its capacity bound."""
+        if len(self._inproc_locks) <= _MAX_INPROC_LOCK_ENTRIES:
+            return
+        for key, slot in list(self._inproc_locks.items()):
+            if slot.users == 0 and not slot.lock.locked():
+                del self._inproc_locks[key]
+            if len(self._inproc_locks) <= _MAX_INPROC_LOCK_ENTRIES:
+                return
 
     def _acquire_cross_process(self, stack: ExitStack, titles: list[str]) -> None:
         for title in titles:
@@ -161,10 +199,16 @@ class PageFetcher:
             try:
                 lock.acquire(timeout=_LOCK_TIMEOUT_S)
                 stack.enter_context(_released(lock))
-            except Timeout:
+            except Timeout as exc:
                 # Another process is taking unusually long; proceed without the
                 # cross-process lock rather than hang. The re-check after this
                 # still prevents redundant work in the common case.
+                logger.warning(
+                    "Cross-process lock timeout (title_hash=%s): %s: %s",
+                    title_hash(title),
+                    type(exc).__name__,
+                    exc,
+                )
                 continue
 
 

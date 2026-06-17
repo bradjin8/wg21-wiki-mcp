@@ -47,6 +47,10 @@ class FakeWikiClient:
         self.revision_calls = 0
         self._active = "bot"
         self._user = "TestBot@ci"
+        self._closed = False
+
+    def close(self) -> None:
+        self._closed = True
 
     # auth surface
     @property
@@ -177,6 +181,7 @@ class FakeCalendar:
     mode: str = "normal"
     ttl_normal: int = 604800
     ttl_meeting: int = 3600
+    _closed: bool = False
 
     def is_meeting_active(self, when=None) -> bool:
         return self.active
@@ -196,6 +201,9 @@ class FakeCalendar:
             windows=[],
         )
 
+    def close(self) -> None:
+        self._closed = True
+
 
 def make_config(tmp_path: Path) -> Config:
     return Config(
@@ -213,15 +221,28 @@ def fake_client() -> FakeWikiClient:
 
 @pytest.fixture
 def make_ctx(tmp_path: Path):
+    contexts: list[ServerContext] = []
+
     def _make(client: FakeWikiClient, *, calendar: FakeCalendar | None = None) -> ServerContext:
         config = make_config(tmp_path)
         cache = Cache(config.cache_dir)
-        return ServerContext(
+        ctx = ServerContext(
             config=config,
             client=client,  # type: ignore[arg-type]
             calendar=calendar or FakeCalendar(),  # type: ignore[arg-type]
             cache=cache,
             fetcher=PageFetcher(client, cache),  # type: ignore[arg-type]
         )
+        contexts.append(ctx)
+        return ctx
 
-    return _make
+    yield _make
+    first_error: BaseException | None = None
+    for ctx in contexts:
+        try:
+            ctx.close()
+        except BaseException as exc:
+            if first_error is None:
+                first_error = exc
+    if first_error is not None:
+        raise first_error

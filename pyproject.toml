@@ -38,6 +38,7 @@ dev = [
     "hypothesis>=6.100",
     "ruff>=0.6",
     "mypy>=1.10",
+    "types-requests>=2.31",
     "pre-commit>=3.7",
 ]
 
@@ -53,7 +54,7 @@ packages = ["src/wg21_wiki_mcp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--cov=wg21_wiki_mcp --cov-branch --cov-report=term-missing --cov-fail-under=90"
+addopts = "--cov=wg21_wiki_mcp --cov-branch --cov-report=term-missing --cov-fail-under=95"
 markers = [
     "live: tests that hit the real wiki using configured credentials (skipped without them)",
 ]
