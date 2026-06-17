@@ -52,11 +52,13 @@ in captured log output (`caplog`).
 ## Committed-secret scanning
 
 Every pull request runs [Gitleaks](https://github.com/gitleaks/gitleaks) in CI
-(`.github/workflows/ci.yml`) using the MIT-licensed CLI binary (not the
-`gitleaks-action` wrapper, which requires an organization license). The job
-fails if a high-confidence secret is detected in commits reachable from the PR
-branch. This complements the runtime redaction layer: secrets must neither leak
-at runtime nor be committed.
+(`.github/workflows/ci.yml`) using the MIT-licensed CLI binary. We do not use the
+`gitleaks-action` wrapper: that action requires a `GITLEAKS_LICENSE` repository
+secret for organization-owned repos (free keys are available at
+[gitleaks.io](https://gitleaks.io/products)). Running the CLI directly provides
+the same scan coverage with no license key. The job fails if a high-confidence
+secret is detected in commits reachable from the PR branch. This complements the
+runtime redaction layer: secrets must neither leak at runtime nor be committed.
 
 ## Reporting a vulnerability
 
