@@ -52,9 +52,11 @@ in captured log output (`caplog`).
 ## Committed-secret scanning
 
 Every pull request runs [Gitleaks](https://github.com/gitleaks/gitleaks) in CI
-(`.github/workflows/ci.yml`). The job fails if a high-confidence secret is
-detected in the repository history reachable from the PR branch. This complements
-the runtime redaction layer: secrets must neither leak at runtime nor be committed.
+(`.github/workflows/ci.yml`) using the MIT-licensed CLI binary (not the
+`gitleaks-action` wrapper, which requires an organization license). The job
+fails if a high-confidence secret is detected in commits reachable from the PR
+branch. This complements the runtime redaction layer: secrets must neither leak
+at runtime nor be committed.
 
 ## Reporting a vulnerability
 
