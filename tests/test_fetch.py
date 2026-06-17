@@ -156,3 +156,17 @@ def test_missing_page(fetcher_stack):
     fetcher, client, _ = fetcher_stack
     out = fetcher.get_page("Ghost", ttl_seconds=1000)
     assert out.missing is True and out.content is None
+
+
+def test_inproc_lock_map_bounded(tmp_path, monkeypatch):
+    from wg21_wiki_mcp.fetch import PageFetcher
+
+    monkeypatch.setattr("wg21_wiki_mcp.fetch._MAX_INPROC_LOCK_ENTRIES", 2)
+    client = FakeWikiClient()
+    cache = Cache(tmp_path / "c")
+    fetcher = PageFetcher(client, cache)
+    for i in range(4):
+        client.pages[f"P{i}"] = FakePage(f"b{i}", i)
+        fetcher.get_page(f"P{i}", ttl_seconds=1000)
+    assert len(fetcher._inproc_locks) <= 2
+    cache.close()

@@ -73,7 +73,7 @@ async def _lifespan(_server: FastMCP) -> AsyncIterator[dict]:
     try:
         yield {}
     finally:
-        shutdown_ctx = _state.pop("ctx") if "ctx" in _state else None
+        shutdown_ctx = _state.pop("ctx", None)
         if shutdown_ctx is not None:
             shutdown_ctx.close()
 

@@ -237,5 +237,12 @@ def make_ctx(tmp_path: Path):
         return ctx
 
     yield _make
+    first_error: BaseException | None = None
     for ctx in contexts:
-        ctx.close()
+        try:
+            ctx.close()
+        except BaseException as exc:
+            if first_error is None:
+                first_error = exc
+    if first_error is not None:
+        raise first_error

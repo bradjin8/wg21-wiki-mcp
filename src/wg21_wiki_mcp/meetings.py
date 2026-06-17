@@ -90,6 +90,8 @@ class MeetingCalendar:
     def ensure_fresh(self) -> None:
         """Refresh the calendar at most once per day."""
         with self._lock:
+            if self._closed:
+                return
             now = datetime.now(timezone.utc)
             if self._last_fetched is not None and now - self._last_fetched < _REFRESH_INTERVAL:
                 return
@@ -154,8 +156,9 @@ class MeetingCalendar:
 
     def close(self) -> None:
         """Close the HTTP session when this calendar owns it."""
-        if self._closed:
-            return
-        self._closed = True
-        if self._owns_session and hasattr(self._session, "close"):
-            self._session.close()
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            if self._owns_session and hasattr(self._session, "close"):
+                self._session.close()

@@ -89,3 +89,17 @@ def test_overrides_take_precedence(tmp_path):
     assert cal.is_meeting_active(date(2031, 1, 3)) is False  # override governs, not conservative
     status = cal.status()
     assert status.parse_status == "override"
+
+
+def test_ensure_fresh_skips_when_closed(tmp_path):
+    cal = MeetingCalendar(_config(tmp_path), session=_FakeSession(_SAMPLE))
+    cal.close()
+    cal.ensure_fresh()
+    assert cal._last_fetched is None
+
+
+def test_close_is_idempotent(tmp_path):
+    cal = MeetingCalendar(_config(tmp_path), session=_FakeSession(_SAMPLE))
+    cal.close()
+    cal.close()
+    assert cal._closed is True

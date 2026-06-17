@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from conftest import FakeCalendar, FakePage, FakeWikiClient, make_config
 
 from wg21_wiki_mcp import server
@@ -61,17 +62,18 @@ def _fake_ctx(tmp_path) -> ServerContext:
 def test_tool_wrappers_delegate(monkeypatch, tmp_path):
     ctx = _fake_ctx(tmp_path)
     monkeypatch.setattr(server, "get_context", lambda: ctx)
-
-    assert server.search_wiki("q").hits[0].title == "Hit"
-    assert server.get_page("2026-06 Alpha").content == "home"
-    assert server.list_pages(0).pages[0].title == "2026-06 Alpha"
-    assert isinstance(server.list_namespaces(), list)
-    assert server.list_meetings().meetings[0].title == "2026-06 Alpha"
-    assert server.get_meeting_overview().meeting == "2026-06 Alpha"
-    assert server.get_meeting_sessions().meeting == "2026-06 Alpha"
-    assert server.get_recent_changes().changes == []
-    assert server.wiki_status().authenticated is True
-    ctx.close()
+    try:
+        assert server.search_wiki("q").hits[0].title == "Hit"
+        assert server.get_page("2026-06 Alpha").content == "home"
+        assert server.list_pages(0).pages[0].title == "2026-06 Alpha"
+        assert isinstance(server.list_namespaces(), list)
+        assert server.list_meetings().meetings[0].title == "2026-06 Alpha"
+        assert server.get_meeting_overview().meeting == "2026-06 Alpha"
+        assert server.get_meeting_sessions().meeting == "2026-06 Alpha"
+        assert server.get_recent_changes().changes == []
+        assert server.wiki_status().authenticated is True
+    finally:
+        ctx.close()
 
 
 def test_lifespan_runs(monkeypatch, tmp_path):
@@ -88,3 +90,40 @@ def test_lifespan_runs(monkeypatch, tmp_path):
             return True
 
     assert asyncio.run(run()) is True
+
+
+def test_wrap_passthrough_mcp_error():
+    from mcp.shared.exceptions import McpError
+    from mcp.types import ErrorData
+
+    from wg21_wiki_mcp.server import _wrap
+
+    def _raise_mcp() -> None:
+        raise McpError(ErrorData(code=-32602, message="bad params"))
+
+    with pytest.raises(McpError):
+        _wrap(_raise_mcp)
+
+
+def test_wrap_converts_unexpected_exception():
+    from mcp.shared.exceptions import McpError
+
+    from wg21_wiki_mcp.server import _wrap
+
+    def _boom() -> None:
+        raise ValueError("unexpected")
+
+    with pytest.raises(McpError):
+        _wrap(_boom)
+
+
+def test_main_runs_mcp(monkeypatch):
+    called = False
+
+    def _run() -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(server.mcp, "run", _run)
+    server.main()
+    assert called is True

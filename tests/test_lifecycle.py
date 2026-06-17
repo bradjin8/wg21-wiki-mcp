@@ -89,6 +89,30 @@ def test_server_context_close_continues_after_failure(tmp_path):
     assert ctx.client._closed is True
 
 
+def test_server_context_close_calendar_failure(tmp_path):
+    ctx = _ctx(tmp_path)
+
+    def _boom() -> None:
+        raise RuntimeError("calendar close failed")
+
+    ctx.calendar.close = _boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="calendar close failed"):
+        ctx.close()
+    assert ctx.client._closed is True
+
+
+def test_server_context_close_client_failure(tmp_path):
+    ctx = _ctx(tmp_path)
+
+    def _boom() -> None:
+        raise RuntimeError("client close failed")
+
+    ctx.client.close = _boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="client close failed"):
+        ctx.close()
+    assert ctx.calendar._closed is True
+
+
 def test_lifespan_closes_context(monkeypatch, tmp_path):
     ctx = _ctx(tmp_path)
     closed = False
@@ -196,6 +220,19 @@ def test_wiki_client_use_after_close_raises(tmp_path):
         client.login()
     with pytest.raises(RuntimeError, match="closed"):
         client.api("query", meta="siteinfo")
+
+
+def test_wiki_client_username_before_login(tmp_path):
+    client = WikiClient(make_config(tmp_path))
+    assert client.username is None
+    client.close()
+
+
+def test_wiki_client_close_idempotent(tmp_path):
+    client = WikiClient(make_config(tmp_path))
+    client.close()
+    client.close()
+    assert client._closed is True
 
 
 def test_get_logger_package_name():
