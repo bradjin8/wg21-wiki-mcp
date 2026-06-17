@@ -31,7 +31,7 @@ _CREDENTIAL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)(passwd\s*[=:]\s*)\S+"),
     re.compile(r"(?i)(token\s*[=:]\s*)\S+"),
     re.compile(r"(?i)(secret\s*[=:]\s*)\S+"),
-    re.compile(r"(?i)(authorization\s*:\s*)\S+", re.IGNORECASE),
+    re.compile(r"(?i)(authorization\s*:\s*).+"),
     re.compile(r"(?i)(apikey\s*[=:]\s*)\S+"),
 )
 
@@ -50,6 +50,8 @@ _KNOWN_SAFE_AUTH_MESSAGES = frozenset(
     }
 )
 
+_SESSION_REAUTH_MESSAGE_RE = re.compile(r"^Session could not be re-established after \d+ attempts\.$")
+
 
 def is_safe_auth_message(message: str) -> bool:
     """Return True if ``message`` was constructed without upstream exception text."""
@@ -57,9 +59,7 @@ def is_safe_auth_message(message: str) -> bool:
         return True
     if message.startswith("Authentication failed (") and message.endswith("); verify wiki credentials."):
         return True
-    if message.startswith("Session could not be re-established after "):
-        return True
-    return False
+    return _SESSION_REAUTH_MESSAGE_RE.match(message) is not None
 
 
 def auth_error_mcp_message(exc: BaseException) -> str:
@@ -133,5 +133,20 @@ class LogSafetyFilter(logging.Filter):
         if isinstance(record.msg, str):
             record.msg = sanitize_text(record.msg)
         if record.args:
-            record.args = tuple(sanitize_text(arg) if isinstance(arg, str) else arg for arg in record.args)
+            args = record.args
+            if isinstance(args, dict):
+                record.args = {
+                    key: sanitize_text(value) if isinstance(value, str) else value for key, value in args.items()
+                }
+            elif isinstance(args, tuple):
+                if len(args) == 1 and isinstance(args[0], dict):
+                    mapping = args[0]
+                    record.args = (
+                        {
+                            key: sanitize_text(value) if isinstance(value, str) else value
+                            for key, value in mapping.items()
+                        },
+                    )
+                else:
+                    record.args = tuple(sanitize_text(arg) if isinstance(arg, str) else arg for arg in args)
         return True

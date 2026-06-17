@@ -13,14 +13,20 @@ from mwclient.errors import LoginError
 from wg21_wiki_mcp import wiki_client as wc
 from wg21_wiki_mcp.cache import Cache
 from wg21_wiki_mcp.config import Config, Credentials
+from wg21_wiki_mcp.context import ServerContext
 from wg21_wiki_mcp.errors import AUTH_ERROR, AuthError, to_mcp_error
 from wg21_wiki_mcp.fetch import PageFetcher
 from wg21_wiki_mcp.log import get_logger
 from wg21_wiki_mcp.log_safety import (
+    AUTH_FAILURE_MESSAGE,
     LogSafetyFilter,
+    auth_error_mcp_message,
     auth_path_failure_label,
     clear_redactions,
+    is_safe_auth_message,
+    register_config_secrets,
     register_redactions,
+    safe_exception_summary,
     sanitize_text,
     summarize_auth_failures,
 )
@@ -51,10 +57,59 @@ class TestSanitizeText:
         assert "MySecret123" not in out
         assert "abc" not in out
         assert out.count("[REDACTED]") >= 2
+        bearer = sanitize_text("Authorization: Bearer mytoken123")
+        assert "mytoken123" not in bearer
+        assert "[REDACTED]" in bearer
 
     def test_ignores_short_secrets(self):
         register_redactions("abc")
         assert sanitize_text("abc") == "abc"
+
+    def test_session_reauth_message_requires_full_format(self):
+        assert is_safe_auth_message("Session could not be re-established after 6 attempts.")
+        assert not is_safe_auth_message("Session could not be re-established after 6 attempts. leaked-secret")
+
+    def test_empty_text_is_unchanged(self):
+        assert sanitize_text("") == ""
+
+    def test_known_safe_auth_messages(self):
+        assert is_safe_auth_message(AUTH_FAILURE_MESSAGE)
+        assert is_safe_auth_message("SAML login failed (no SAMLResponse; check credentials/MFA).")
+        assert is_safe_auth_message("Authentication failed (bot: LoginError); verify wiki credentials.")
+
+    def test_summarize_auth_failures_empty_paths(self):
+        assert summarize_auth_failures([]) == AUTH_FAILURE_MESSAGE
+
+    def test_safe_exception_summary_empty_message(self):
+        assert safe_exception_summary(RuntimeError()) == "RuntimeError"
+
+    def test_auth_error_mcp_message_passes_safe_message(self):
+        safe = summarize_auth_failures(["bot: LoginError"])
+        assert auth_error_mcp_message(AuthErrorModel(safe)) == safe
+
+    def test_register_config_secrets(self, tmp_path):
+        config = Config(
+            base_url="https://w.example",
+            bot=Credentials("bot", "b", "bot-password-value"),
+            user=Credentials("user", "u", "user-password-value"),
+            cache_dir=tmp_path / "c",
+        )
+        register_config_secrets(config)
+        assert "bot-password-value" not in sanitize_text("leak bot-password-value")
+        assert "user-password-value" not in sanitize_text("leak user-password-value")
+
+    def test_server_context_create_registers_secrets(self, tmp_path):
+        config = Config(
+            base_url="https://w.example",
+            bot=Credentials("bot", "b", "ctx-secret-password"),
+            user=None,
+            cache_dir=tmp_path / "c",
+        )
+        ctx = ServerContext.create(config)
+        try:
+            assert "ctx-secret-password" not in sanitize_text("ctx-secret-password")
+        finally:
+            ctx.close()
 
 
 class TestLogSafetyFilter:
@@ -194,3 +249,45 @@ class TestLogSafetyFilterUnit:
             exc_info=None,
         )
         assert LogSafetyFilter().filter(record) is True
+
+    def test_filter_handles_mapping_style_args(self):
+        register_redactions("supersecretpassword")
+        record = logging.LogRecord(
+            name="wg21_wiki_mcp.test",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=1,
+            msg="value=%(key)s",
+            args=({"key": "supersecretpassword"},),
+            exc_info=None,
+        )
+        assert LogSafetyFilter().filter(record) is True
+        assert record.args == {"key": "[REDACTED]"}
+
+    def test_filter_handles_tuple_wrapped_mapping_args(self):
+        register_redactions("tuple-secret-value")
+        record = logging.LogRecord(
+            name="wg21_wiki_mcp.test",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=1,
+            msg="value=%(key)s",
+            args=(),
+            exc_info=None,
+        )
+        record.args = ({"key": "tuple-secret-value"},)
+        assert LogSafetyFilter().filter(record) is True
+        assert record.args == ({"key": "[REDACTED]"},)
+
+    def test_filter_skips_non_string_message(self):
+        record = logging.LogRecord(
+            name="wg21_wiki_mcp.test",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=1,
+            msg=12345,
+            args=(),
+            exc_info=None,
+        )
+        assert LogSafetyFilter().filter(record) is True
+        assert record.msg == 12345

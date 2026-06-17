@@ -89,27 +89,29 @@ def test_server_context_close_continues_after_failure(tmp_path):
     assert ctx.client._closed is True
 
 
-def test_server_context_close_calendar_failure(tmp_path):
+def test_server_context_close_raises_first_calendar_failure(tmp_path):
     ctx = _ctx(tmp_path)
 
-    def _boom() -> None:
+    def _calendar_boom() -> None:
         raise RuntimeError("calendar close failed")
 
-    ctx.calendar.close = _boom  # type: ignore[method-assign]
+    ctx.calendar.close = _calendar_boom  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="calendar close failed"):
         ctx.close()
+    assert ctx.cache._closed is True
     assert ctx.client._closed is True
 
 
-def test_server_context_close_client_failure(tmp_path):
+def test_server_context_close_raises_first_client_failure(tmp_path):
     ctx = _ctx(tmp_path)
 
-    def _boom() -> None:
+    def _client_boom() -> None:
         raise RuntimeError("client close failed")
 
-    ctx.client.close = _boom  # type: ignore[method-assign]
+    ctx.client.close = _client_boom  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="client close failed"):
         ctx.close()
+    assert ctx.cache._closed is True
     assert ctx.calendar._closed is True
 
 
@@ -148,6 +150,20 @@ def test_inproc_locks_evicted_after_fetch(tmp_path):
         client.pages[f"P{i}"] = FakePage(f"b{i}", i)
         fetcher.get_page(f"P{i}", ttl_seconds=1000)
     assert len(fetcher._inproc_locks) == 0
+    cache.close()
+
+
+def test_inproc_lock_capacity_eviction(tmp_path, monkeypatch):
+    client = FakeWikiClient()
+    cache = Cache(tmp_path / "c")
+    fetcher = PageFetcher(client, cache)  # type: ignore[arg-type]
+    monkeypatch.setattr("wg21_wiki_mcp.fetch._MAX_INPROC_LOCK_ENTRIES", 1)
+
+    for title in ("P0", "P1"):
+        client.pages[title] = FakePage(f"body-{title}", 1)
+        fetcher.get_page(title, ttl_seconds=1000)
+
+    assert len(fetcher._inproc_locks) <= 1
     cache.close()
 
 
@@ -211,6 +227,21 @@ def test_wiki_client_close(tmp_path):
     client.close()
     site.connection.close.assert_called_once()
     assert client._site is None
+
+
+def test_wiki_client_close_clears_state_when_connection_close_fails(tmp_path):
+    client = WikiClient(make_config(tmp_path))
+    site = MagicMock()
+    site.connection.close.side_effect = RuntimeError("close failed")
+    client._site = site  # type: ignore[attr-defined]
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        client.close()
+
+    assert client._site is None
+    assert client._active is None
+    assert client._closed is True
+    client.close()  # idempotent after failed close
 
 
 def test_wiki_client_use_after_close_raises(tmp_path):

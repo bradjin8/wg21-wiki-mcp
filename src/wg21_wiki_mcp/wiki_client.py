@@ -377,9 +377,11 @@ class WikiClient:
         """Close the underlying HTTP session and release the site handle."""
         if self._closed:
             return
-        self._closed = True
         with self._lock:
-            if self._site is not None:
-                self._site.connection.close()
+            try:
+                if self._site is not None:
+                    self._site.connection.close()
+            finally:
                 self._site = None
-            self._active = None
+                self._active = None
+                self._closed = True
