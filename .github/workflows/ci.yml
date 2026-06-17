@@ -11,6 +11,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# gitleaks/gitleaks-action@v2 requires GITLEAKS_LICENSE for organization repos.
+# The MIT-licensed gitleaks CLI is free; install and run it directly instead.
+
+env:
+  GITLEAKS_VERSION: "8.24.2"
+
 jobs:
   test:
     name: offline (${{ matrix.os }}, py${{ matrix.python-version }})
@@ -35,6 +41,46 @@ jobs:
         run: mypy src
       - name: Tests + coverage gate (offline)
         run: pytest -m "not live"
+
+  secret-scan:
+    name: secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          curl -sSLf \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            -o /tmp/gitleaks.tgz
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+      - name: Scan pull request commits
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          echo "Scanning ${BASE}..${HEAD}"
+          gitleaks detect \
+            --source . \
+            --log-opts="${BASE}..${HEAD}" \
+            --redact \
+            --verbose
+      - name: Scan full history
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          gitleaks detect \
+            --source . \
+            --redact \
+            --verbose
 
   live:
     name: live (secrets)

@@ -18,6 +18,7 @@ import requests
 
 from .config import Config
 from .log import get_logger
+from .log_safety import safe_exception_summary
 from .models import CalendarStatus
 
 logger = get_logger("meetings")
@@ -102,9 +103,8 @@ class MeetingCalendar:
                 self._parse_status = "ok" if self._windows else "partial"
             except Exception as exc:  # noqa: BLE001 - network/parse failure -> conservative
                 logger.warning(
-                    "Calendar fetch/parse failed: %s: %s",
-                    type(exc).__name__,
-                    exc,
+                    "Calendar fetch/parse failed: %s",
+                    safe_exception_summary(exc),
                 )
                 self._parse_status = "failed"
             finally:

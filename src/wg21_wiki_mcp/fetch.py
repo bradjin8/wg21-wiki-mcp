@@ -23,6 +23,7 @@ from filelock import FileLock, Timeout
 
 from .cache import Cache, CacheEntry, title_hash
 from .log import get_logger
+from .log_safety import safe_exception_summary
 from .wiki_client import FetchedPage, WikiClient
 
 logger = get_logger("fetch")
@@ -204,10 +205,9 @@ class PageFetcher:
                 # cross-process lock rather than hang. The re-check after this
                 # still prevents redundant work in the common case.
                 logger.warning(
-                    "Cross-process lock timeout (title_hash=%s): %s: %s",
+                    "Cross-process lock timeout (title_hash=%s): %s",
                     title_hash(title),
-                    type(exc).__name__,
-                    exc,
+                    safe_exception_summary(exc),
                 )
                 continue
 

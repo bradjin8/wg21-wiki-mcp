@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import warnings
 from unittest.mock import MagicMock, patch
 
@@ -89,27 +90,29 @@ def test_server_context_close_continues_after_failure(tmp_path):
     assert ctx.client._closed is True
 
 
-def test_server_context_close_calendar_failure(tmp_path):
+def test_server_context_close_raises_first_calendar_failure(tmp_path):
     ctx = _ctx(tmp_path)
 
-    def _boom() -> None:
+    def _calendar_boom() -> None:
         raise RuntimeError("calendar close failed")
 
-    ctx.calendar.close = _boom  # type: ignore[method-assign]
+    ctx.calendar.close = _calendar_boom  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="calendar close failed"):
         ctx.close()
+    assert ctx.cache._closed is True
     assert ctx.client._closed is True
 
 
-def test_server_context_close_client_failure(tmp_path):
+def test_server_context_close_raises_first_client_failure(tmp_path):
     ctx = _ctx(tmp_path)
 
-    def _boom() -> None:
+    def _client_boom() -> None:
         raise RuntimeError("client close failed")
 
-    ctx.client.close = _boom  # type: ignore[method-assign]
+    ctx.client.close = _client_boom  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="client close failed"):
         ctx.close()
+    assert ctx.cache._closed is True
     assert ctx.calendar._closed is True
 
 
@@ -148,6 +151,84 @@ def test_inproc_locks_evicted_after_fetch(tmp_path):
         client.pages[f"P{i}"] = FakePage(f"b{i}", i)
         fetcher.get_page(f"P{i}", ttl_seconds=1000)
     assert len(fetcher._inproc_locks) == 0
+    cache.close()
+
+
+def test_inproc_lock_capacity_eviction(tmp_path, monkeypatch):
+    client = FakeWikiClient()
+    cache = Cache(tmp_path / "c")
+    fetcher = PageFetcher(client, cache)  # type: ignore[arg-type]
+    monkeypatch.setattr("wg21_wiki_mcp.fetch._MAX_INPROC_LOCK_ENTRIES", 1)
+
+    for title in ("P0", "P1"):
+        client.pages[title] = FakePage(f"body-{title}", 1)
+        fetcher.get_page(title, ttl_seconds=1000)
+
+    assert len(fetcher._inproc_locks) <= 1
+    cache.close()
+
+
+def test_inproc_lock_single_flight_under_slow_fetch(tmp_path):
+    """Concurrent get_page on one title during a slow fetch coalesces to one network call."""
+    client = FakeWikiClient()
+    client.pages["P"] = FakePage("body", 1)
+    cache = Cache(tmp_path / "c")
+    fetcher = PageFetcher(client, cache)  # type: ignore[arg-type]
+
+    inside_fetch = threading.Event()
+    allow_finish = threading.Event()
+    real_fetch = client.fetch_pages
+
+    def gated_fetch(titles: list[str]):
+        inside_fetch.set()
+        assert allow_finish.wait(timeout=5)
+        return real_fetch(titles)
+
+    client.fetch_pages = gated_fetch  # type: ignore[method-assign]
+
+    holder_error: list[BaseException] = []
+    waiter_error: list[BaseException] = []
+
+    def holder() -> None:
+        try:
+            fetcher.get_page("P", ttl_seconds=1000)
+        except BaseException as exc:
+            holder_error.append(exc)
+
+    def waiter() -> None:
+        try:
+            fetcher.get_page("P", ttl_seconds=1000)
+        except BaseException as exc:
+            waiter_error.append(exc)
+
+    holder_thread = threading.Thread(target=holder)
+    holder_thread.start()
+    assert inside_fetch.wait(timeout=5)
+
+    with fetcher._inproc_guard:
+        slot = fetcher._inproc_locks["P"]
+        lock_while_held = slot.lock
+        assert slot.users >= 1
+
+    waiter_thread = threading.Thread(target=waiter)
+    waiter_thread.start()
+
+    for _ in range(100):
+        with fetcher._inproc_guard:
+            slot = fetcher._inproc_locks.get("P")
+            if slot is not None and slot.users >= 2 and slot.lock is lock_while_held:
+                break
+        threading.Event().wait(0.01)
+    else:
+        raise AssertionError("waiter never joined the in-process lock slot")
+
+    allow_finish.set()
+    holder_thread.join(timeout=5)
+    waiter_thread.join(timeout=5)
+
+    assert not holder_error
+    assert not waiter_error
+    assert client.fetch_calls == 1
     cache.close()
 
 
@@ -211,6 +292,21 @@ def test_wiki_client_close(tmp_path):
     client.close()
     site.connection.close.assert_called_once()
     assert client._site is None
+
+
+def test_wiki_client_close_clears_state_when_connection_close_fails(tmp_path):
+    client = WikiClient(make_config(tmp_path))
+    site = MagicMock()
+    site.connection.close.side_effect = RuntimeError("close failed")
+    client._site = site  # type: ignore[attr-defined]
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        client.close()
+
+    assert client._site is None
+    assert client._active is None
+    assert client._closed is True
+    client.close()  # idempotent after failed close
 
 
 def test_wiki_client_use_after_close_raises(tmp_path):

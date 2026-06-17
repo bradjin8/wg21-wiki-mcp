@@ -18,6 +18,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cursors, UTF-8 chunking, wikitext slot parsing, and `WikiClient` HTTP/API
   edge paths; `hypothesis` added to the `dev` extra.
 - `log.py`: library-style stdlib logging with a package `NullHandler`.
+- `log_safety.py`: centralized log redaction (`register_redactions`,
+  `sanitize_text`, `LogSafetyFilter`) and safe auth-error message helpers.
 - Resource lifecycle: `Cache.close()` (context-manager supported),
   `WikiClient.close()`, `MeetingCalendar.close()`, and
   `ServerContext.close()` orchestrating teardown; wired into the FastMCP

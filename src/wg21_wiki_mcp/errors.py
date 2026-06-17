@@ -32,6 +32,8 @@ from __future__ import annotations
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData
 
+from .log_safety import auth_error_mcp_message
+
 # ---------------------------------------------------------------------------
 # Application error codes (positive integers, distinct from JSON-RPC reserved)
 # ---------------------------------------------------------------------------
@@ -101,12 +103,12 @@ def to_mcp_error(exc: BaseException) -> McpError:
         return McpError(ErrorData(code=PAGE_NOT_FOUND, message=str(exc) or "Page not found."))
 
     if isinstance(exc, AuthError):
-        # Use a fixed message; the original may contain credential-adjacent
-        # information from the underlying login exception chain.
+        # AuthError messages are built by log_safety helpers; unsafe legacy
+        # messages fall back to AUTH_FAILURE_MESSAGE at the MCP boundary.
         return McpError(
             ErrorData(
                 code=AUTH_ERROR,
-                message="Authentication failed; verify wiki credentials in the server configuration.",
+                message=auth_error_mcp_message(exc),
             )
         )
 

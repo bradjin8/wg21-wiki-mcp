@@ -9,13 +9,22 @@ from __future__ import annotations
 
 import logging
 
-_PACKAGE = "wg21_wiki_mcp"
+from .log_safety import LogSafetyFilter
 
-logging.getLogger(_PACKAGE).addHandler(logging.NullHandler())
+_PACKAGE = "wg21_wiki_mcp"
+_LOG_FILTER = LogSafetyFilter()
+
+_root = logging.getLogger(_PACKAGE)
+_root.addHandler(logging.NullHandler())
+_root.addFilter(_LOG_FILTER)
 
 
 def get_logger(name: str) -> logging.Logger:
     """Return a child logger under the package namespace."""
     if name == _PACKAGE or name.startswith(f"{_PACKAGE}."):
-        return logging.getLogger(name)
-    return logging.getLogger(f"{_PACKAGE}.{name}")
+        logger = logging.getLogger(name)
+    else:
+        logger = logging.getLogger(f"{_PACKAGE}.{name}")
+    if not any(isinstance(f, LogSafetyFilter) for f in logger.filters):
+        logger.addFilter(_LOG_FILTER)
+    return logger
