@@ -165,8 +165,10 @@ def test_inproc_lock_map_bounded(tmp_path, monkeypatch):
     client = FakeWikiClient()
     cache = Cache(tmp_path / "c")
     fetcher = PageFetcher(client, cache)
-    for i in range(4):
-        client.pages[f"P{i}"] = FakePage(f"b{i}", i)
-        fetcher.get_page(f"P{i}", ttl_seconds=1000)
-    assert len(fetcher._inproc_locks) <= 2
-    cache.close()
+    try:
+        for i in range(4):
+            client.pages[f"P{i}"] = FakePage(f"b{i}", i)
+            fetcher.get_page(f"P{i}", ttl_seconds=1000)
+        assert len(fetcher._inproc_locks) <= 2
+    finally:
+        cache.close()
