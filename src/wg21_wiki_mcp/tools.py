@@ -50,7 +50,10 @@ def _clamp(value: int, lo: int, hi: int) -> int:
 
 def _lookup_namespace_name(ctx: ServerContext, namespace_id: int) -> str | None:
     """Resolve a namespace id to its API-provided display name, if known."""
-    resp = ctx.client.list_namespaces()
+    try:
+        resp = ctx.client.list_namespaces()
+    except Exception:  # noqa: BLE001 - optional enrichment; list_pages must not fail
+        return None
     for ns_id_str, ns in resp.get("query", {}).get("namespaces", {}).items():
         if int(ns_id_str) == namespace_id:
             name = ns.get("*")

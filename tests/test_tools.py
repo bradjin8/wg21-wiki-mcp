@@ -131,6 +131,20 @@ def test_list_pages_and_cursor(fake_client, make_ctx):
     assert res_project.namespace_name == "Project"
 
 
+def test_list_pages_namespace_lookup_failure(fake_client, make_ctx):
+    fake_client.allpages = [{"title": "Page One", "ns": 0}]
+
+    def _fail() -> dict:
+        raise RuntimeError("namespace lookup timeout")
+
+    fake_client.list_namespaces = _fail  # type: ignore[method-assign]
+    ctx = make_ctx(fake_client)
+    res = tools.list_pages(ctx, 0, limit=10)
+    assert len(res.pages) == 1
+    assert res.pages[0].title == "Page One"
+    assert res.namespace_name is None
+
+
 def test_list_namespaces(fake_client, make_ctx):
     fake_client.namespaces = {
         "-1": {"*": "Special"},

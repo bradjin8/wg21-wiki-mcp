@@ -59,7 +59,12 @@ jobs:
           base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
           curl -sSLf "${base}/${tarball}" -o "/tmp/${tarball}"
           curl -sSLf "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" -o /tmp/gitleaks_checksums.txt
-          grep " ${tarball}$" /tmp/gitleaks_checksums.txt | (cd /tmp && sha256sum --check)
+          match_count=$(grep -Fc " ${tarball}" /tmp/gitleaks_checksums.txt)
+          if [ "${match_count}" -ne 1 ]; then
+            echo "Expected exactly one checksum line for ${tarball}, got ${match_count}"
+            exit 1
+          fi
+          grep -F " ${tarball}" /tmp/gitleaks_checksums.txt | (cd /tmp && sha256sum --check)
           tar -xzf "/tmp/${tarball}" -C /tmp gitleaks
           sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
           gitleaks version
