@@ -55,10 +55,12 @@ jobs:
       - name: Install gitleaks
         run: |
           set -euo pipefail
-          curl -sSLf \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            -o /tmp/gitleaks.tgz
-          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          curl -sSLf "${base}/${tarball}" -o "/tmp/${tarball}"
+          curl -sSLf "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" -o /tmp/gitleaks_checksums.txt
+          grep " ${tarball}$" /tmp/gitleaks_checksums.txt | (cd /tmp && sha256sum --check)
+          tar -xzf "/tmp/${tarball}" -C /tmp gitleaks
           sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
           gitleaks version
       - name: Scan pull request commits

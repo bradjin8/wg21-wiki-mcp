@@ -96,6 +96,30 @@ def test_missing_page(fetcher_stack):
     assert out.missing is True and out.content is None
 
 
+def test_section_cache_miss_then_hit(fetcher_stack):
+    fetcher, client, _ = fetcher_stack
+    client.pages["P"] = FakePage("whole", 3)
+
+    first = fetcher.get_page_section("P", 1, ttl_seconds=1000)
+    assert first.content == "== section 1 ==\nwhole"
+    assert first.from_cache is False
+    assert first.requested_title == "P"
+
+    second = fetcher.get_page_section("P", 1, ttl_seconds=1000)
+    assert second.from_cache is True
+    assert client.section_fetch_calls == 1
+
+
+def test_section_full_page_cached_separately(fetcher_stack):
+    fetcher, client, _ = fetcher_stack
+    client.pages["P"] = FakePage("body", 1)
+
+    fetcher.get_page("P", ttl_seconds=1000)
+    fetcher.get_page_section("P", 2, ttl_seconds=1000)
+    assert client.fetch_calls == 1
+    assert client.section_fetch_calls == 1
+
+
 def test_inproc_lock_map_bounded(tmp_path, monkeypatch):
     from wg21_wiki_mcp.fetch import PageFetcher
 
