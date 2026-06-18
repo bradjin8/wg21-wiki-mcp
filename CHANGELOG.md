@@ -33,6 +33,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - SAML/SSO offline tests (`tests/test_wiki_client_saml.py`) with synthetic HTML
   fixtures under `tests/fixtures/saml/` and `responses`-mocked HTTP flows.
 - CONTRIBUTING.md section on testing bot-password vs user SSO auth paths.
+- `docs/RUNBOOK.md`: operator and agent-consumer troubleshooting (MCP host
+  config, common failures, tool-selection guidance).
+- `MeetingCalendar.window_for_meeting_title()`: maps meeting titles to public
+  calendar ISO date windows.
 
 ### Changed
 - `models.py` and `config.py` re-export their error types from `errors.py`;
@@ -47,6 +51,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `get_page(section=...)` routes through `PageFetcher` instead of calling the
   wiki client directly, restoring the architectural fetch chokepoint invariant.
 - `types-requests` added to the `dev` extra for mypy parity with CI.
+- `list_pages` populates `PageList.namespace_name` from the namespaces API.
+- `list_meetings` populates `MeetingRef.window_start` / `window_end` from the
+  public meeting calendar when a year-month match exists.
+- CHANGELOG 0.1.0 tool list corrected to include `list_namespaces`.
 
 ## [0.1.0] - 2026-06-12
 
@@ -58,9 +66,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and a meeting-aware TTL driven by the public meeting calendar.
 - Centralized `PageFetcher` with batched (`titles=`) coalescing, single-flight
   de-duplication, and bounded concurrency.
-- Tools: `search_wiki`, `get_page`, `list_pages`, `list_meetings`,
-  `get_meeting_overview`, `get_meeting_sessions`, `get_recent_changes`,
-  `wiki_status`, with opaque cursor pagination.
+- Tools: `search_wiki`, `get_page`, `list_pages`, `list_namespaces`,
+  `list_meetings`, `get_meeting_overview`, `get_meeting_sessions`,
+  `get_recent_changes`, `wiki_status`, with opaque cursor pagination.
 - Verbatim, provenance-bearing responses (canonical + `oldid` URLs, `revid`).
 
 [Unreleased]: https://github.com/cppalliance/wg21-wiki-mcp/compare/v0.1.0...HEAD

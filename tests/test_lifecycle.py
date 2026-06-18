@@ -168,8 +168,6 @@ def test_inproc_lock_capacity_eviction(tmp_path, monkeypatch):
     cache.close()
 
 
-
-
 def test_inproc_lock_single_flight_under_slow_fetch(tmp_path):
     """Concurrent get_page on one title during a slow fetch coalesces to one network call."""
     client = FakeWikiClient()

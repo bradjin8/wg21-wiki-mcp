@@ -48,6 +48,19 @@ def _clamp(value: int, lo: int, hi: int) -> int:
     return max(lo, min(value, hi))
 
 
+def _lookup_namespace_name(ctx: ServerContext, namespace_id: int) -> str | None:
+    """Resolve a namespace id to its API-provided display name, if known."""
+    try:
+        resp = ctx.client.list_namespaces()
+    except Exception:  # noqa: BLE001 - optional enrichment; list_pages must not fail
+        return None
+    for ns_id_str, ns in resp.get("query", {}).get("namespaces", {}).items():
+        if int(ns_id_str) == namespace_id:
+            name = ns.get("*")
+            return name if name is not None else None
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # search_wiki
 # --------------------------------------------------------------------------- #
@@ -158,7 +171,12 @@ def list_pages(
     ]
     next_cont = resp.get("continue", {}).get("apcontinue")
     next_cursor = encode_cursor({"c": next_cont}) if next_cont is not None else None
-    return PageList(namespace_id=namespace, pages=pages, next_cursor=next_cursor)
+    return PageList(
+        namespace_id=namespace,
+        namespace_name=_lookup_namespace_name(ctx, namespace),
+        pages=pages,
+        next_cursor=next_cursor,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -216,7 +234,18 @@ def list_meetings(
     all_meetings = _discover_meetings(ctx)
     active = all_meetings[0] if (all_meetings and ctx.calendar.is_meeting_active()) else None
     window = all_meetings[offset : offset + limit]
-    refs = [MeetingRef(title=t, url=ctx.client.canonical_url(t), is_active=(t == active)) for t in window]
+    refs = []
+    for t in window:
+        window_start, window_end = ctx.calendar.window_for_meeting_title(t)
+        refs.append(
+            MeetingRef(
+                title=t,
+                url=ctx.client.canonical_url(t),
+                is_active=(t == active),
+                window_start=window_start,
+                window_end=window_end,
+            )
+        )
     next_offset = offset + limit
     next_cursor = encode_cursor({"o": next_offset}) if next_offset < len(all_meetings) else None
     return MeetingList(meetings=refs, active_meeting=active, next_cursor=next_cursor)

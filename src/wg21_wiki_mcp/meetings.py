@@ -142,6 +142,22 @@ class MeetingCalendar:
             return "conservative"
         return "meeting" if self.is_meeting_active(when) else "normal"
 
+    def window_for_meeting_title(self, title: str) -> tuple[str | None, str | None]:
+        """Map a ``YYYY-MM Location`` meeting title to public-calendar ISO dates.
+
+        Matches on the title's year-month prefix against each window's start date.
+        Returns ``(None, None)`` when no window is known for that prefix.
+        """
+        if len(title) < 7 or title[4] != "-":
+            return None, None
+        ym_prefix = title[:7]
+        self.ensure_fresh()
+        windows, _ = self._effective_windows()
+        for start, end in windows:
+            if start.strftime("%Y-%m") == ym_prefix:
+                return start.isoformat(), end.isoformat()
+        return None, None
+
     def status(self) -> CalendarStatus:
         """Return the calendar's parse status and current meeting-window state."""
         self.ensure_fresh()

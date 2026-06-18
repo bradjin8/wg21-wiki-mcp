@@ -176,6 +176,7 @@ class FakeCalendar:
     mode: str = "normal"
     ttl_normal: int = 604800
     ttl_meeting: int = 3600
+    meeting_windows: dict[str, tuple[str, str]] | None = None
     _closed: bool = False
 
     def is_meeting_active(self, when=None) -> bool:
@@ -186,6 +187,11 @@ class FakeCalendar:
 
     def ttl_mode(self, when=None) -> str:
         return self.mode
+
+    def window_for_meeting_title(self, title: str) -> tuple[str | None, str | None]:
+        if not self.meeting_windows or len(title) < 7 or title[4] != "-":
+            return None, None
+        return self.meeting_windows.get(title[:7], (None, None))
 
     def status(self) -> CalendarStatus:
         return CalendarStatus(
