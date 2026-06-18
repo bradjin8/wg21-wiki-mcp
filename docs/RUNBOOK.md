@@ -52,10 +52,14 @@ If both bot and user credentials are set, the bot path is tried first. See
 
 ### Startup behavior
 
-On launch the server builds `ServerContext` from the environment, logs in once,
-and keeps the authenticated session for the process lifetime. Misconfigured
-credentials fail at startup (code `4` / `CONFIG_ERROR`) rather than on the first
-tool call.
+On launch the server builds `ServerContext` from the environment, logs in once
+during lifespan startup, and keeps the authenticated session for the process
+lifetime. Both configuration and login failures surface at startup rather than
+on the first tool call, but the codes differ:
+
+- **Code `4` / `CONFIG_ERROR`** — no credentials are configured (missing env vars).
+- **Code `2` / `AUTH_ERROR`** — credentials are present but login fails (wrong
+  password, MFA, SSO drift, etc.) during startup login.
 
 ## Common failures and recovery
 
@@ -221,8 +225,9 @@ full contract.
 2. Call `get_page` on a known small page without `refresh` — confirm provenance
    fields populate.
 3. If auth looks good but content is wrong, retry with `refresh=True`.
-4. If startup fails, verify env vars in the MCP host config and restart the
-   server process.
+4. If startup fails, check the error code: `4` means set credential env vars;
+   `2` means vars are set but login failed (see Authentication / MFA above).
+   Restart the server process after fixing the MCP host config.
 
 ## Related documentation
 
