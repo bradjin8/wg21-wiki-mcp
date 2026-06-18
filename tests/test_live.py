@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+import re
 from typing import TYPE_CHECKING
 
 import pytest
@@ -74,14 +75,42 @@ def _cross_process_fetch_worker(cache_dir: str, title: str, ready: BarrierType) 
         ctx.close()
 
 
+# Exception type names emitted by auth_path_failure_label for network/TLS failures.
+_NETWORK_AUTH_FAILURE_TYPES = frozenset(
+    {
+        "ConnectionError",
+        "ConnectionResetError",
+        "ConnectTimeout",
+        "NewConnectionError",
+        "OSError",
+        "ProtocolError",
+        "ReadTimeout",
+        "SSLError",
+        "Timeout",
+        "TimeoutError",
+    }
+)
+_AUTH_PATH_FAILURE_RE = re.compile(r"\b(?:bot|user): (\w+)")
+
+
+def _auth_error_is_unreachable(exc: AuthError) -> bool:
+    """True when every failed auth path hit a network error (not bad credentials).
+
+    AuthError carries only sanitized type names, not exception chains, so this
+    matches the labels produced by auth_path_failure_label in wiki_client.login.
+    """
+    failure_types = _AUTH_PATH_FAILURE_RE.findall(str(exc))
+    return bool(failure_types) and all(name in _NETWORK_AUTH_FAILURE_TYPES for name in failure_types)
+
+
 def _ensure_wiki_login(ctx: ServerContext) -> None:
     """Log in, or skip live tests when the wiki cannot be reached (not a credential fault)."""
     try:
         ctx.login()
     except AuthError as exc:
-        if "ConnectionError" in str(exc):
+        if _auth_error_is_unreachable(exc):
             pytest.skip(
-                "wiki.isocpp.org is unreachable from this shell (ConnectionError on all auth paths); "
+                "wiki.isocpp.org is unreachable from this shell (network error on all auth paths); "
                 "credentials loaded but TCP/TLS failed — retry when the wiki is reachable or check VPN/proxy"
             )
         raise
@@ -92,9 +121,11 @@ def live_ctx(tmp_path_factory):
     cache_dir = tmp_path_factory.mktemp("live-cache")
     os.environ.setdefault("ISOCPP_WIKI_CACHE_DIR", str(cache_dir))
     ctx = ServerContext.create(Config.from_env())
-    _ensure_wiki_login(ctx)
-    yield ctx
-    ctx.close()
+    try:
+        _ensure_wiki_login(ctx)
+        yield ctx
+    finally:
+        ctx.close()
 
 
 # --- wiki_status -----------------------------------------------------------
@@ -196,7 +227,8 @@ def test_list_pages_pagination(live_ctx):
     page1 = tools.list_pages(live_ctx, 0, limit=1)
     if not page1.next_cursor:
         pytest.skip("not enough pages to exercise pagination")
-    decode_cursor(page1.next_cursor)
+    decoded = decode_cursor(page1.next_cursor)
+    assert "c" in decoded
     page2 = tools.list_pages(live_ctx, 0, limit=1, cursor=page1.next_cursor)
     assert isinstance(page2.pages, list)
     if page1.pages and page2.pages:
