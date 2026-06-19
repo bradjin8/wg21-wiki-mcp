@@ -54,6 +54,11 @@ def _resolve_live_meeting_title(ctx: ServerContext) -> str:
     return listed.meetings[0].title
 
 
+def _live_chunk_page() -> str:
+    """Page title for chunk-pagination live test (override when Main Page is too small)."""
+    return os.environ.get("LIVE_LARGE_PAGE") or _LIVE_PAGE
+
+
 def _assert_provenance(page, ctx: ServerContext) -> None:
     prov = page.provenance
     assert prov.revid is not None
@@ -153,17 +158,22 @@ def test_fetch_main_page_has_provenance(live_ctx):
 
 @skip_no_creds
 def test_get_page_chunk_pagination(live_ctx):
-    page1 = tools.get_page(live_ctx, _LIVE_PAGE, max_bytes=1024)
+    title = _live_chunk_page()
+    page1 = tools.get_page(live_ctx, title, max_bytes=1024)
     assert page1.chunk.total_bytes > 0
     assert page1.chunk.byte_end <= page1.chunk.total_bytes
-    if page1.chunk.has_more:
-        assert page1.chunk.next_cursor is not None
-        decoded = decode_cursor(page1.chunk.next_cursor)
-        assert decoded.get("o") == page1.chunk.byte_end
-        page2 = tools.get_page(live_ctx, _LIVE_PAGE, max_bytes=1024, cursor=page1.chunk.next_cursor)
-        assert page2.chunk.byte_start == page1.chunk.byte_end
-        assert isinstance(page2.content, str)
-        _assert_provenance(page2, live_ctx)
+    if not page1.chunk.has_more:
+        pytest.skip(
+            f"{title!r} fits in 1 KiB — set LIVE_LARGE_PAGE to a larger page title "
+            "to exercise get_page chunk cursor round-trip"
+        )
+    assert page1.chunk.next_cursor is not None
+    decoded = decode_cursor(page1.chunk.next_cursor)
+    assert decoded.get("o") == page1.chunk.byte_end
+    page2 = tools.get_page(live_ctx, title, max_bytes=1024, cursor=page1.chunk.next_cursor)
+    assert page2.chunk.byte_start == page1.chunk.byte_end
+    assert isinstance(page2.content, str)
+    _assert_provenance(page2, live_ctx)
 
 
 @skip_no_creds
