@@ -160,7 +160,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md#error-contract) for the full invariants.
 
 - [docs/RUNBOOK.md](docs/RUNBOOK.md) - MCP host setup, troubleshooting, and agent tool-selection guide.
 - [ARCHITECTURE.md](ARCHITECTURE.md) - design, data flow, parse-vs-offload policy, what may break, future work.
-- [CONTRIBUTING.md](CONTRIBUTING.md) - dev setup, tests, confidentiality rules, where to start reading.
+- [CONTRIBUTING.md](CONTRIBUTING.md) - dev setup, tests, confidentiality rules, governance, and where to start reading.
 - [SECURITY.md](SECURITY.md) - credential handling and confidentiality.
 
 ## License

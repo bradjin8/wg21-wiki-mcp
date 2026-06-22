@@ -95,8 +95,46 @@ policy, and what may break.
 ## Pull requests
 
 - Keep changes focused; add tests for new behavior and keep coverage >= 90%.
-- Run ruff, mypy, and the offline suite before opening a PR.
+- Run `pre-commit run --all-files` and the offline suite before opening a PR.
 - Update `CHANGELOG.md` for user-visible changes.
+
+## Governance
+
+This repository is maintained by The C++ Alliance. Review expectations:
+
+- All changes land via pull request against `develop` (release merges use
+  `develop` → `master`).
+- [CODEOWNERS](CODEOWNERS) maps critical paths (`src/`, `.github/`, `pyproject.toml`)
+  to `@bradjin8`; GitHub automatically requests review from those owners.
+- At least **one approving review** from a code owner is required before merge.
+- All CI status checks must pass (see below).
+- Maintainers merge after approval; external contributors cannot self-merge.
+
+Dependabot opens weekly update PRs for Python dependencies and GitHub Actions.
+Those PRs follow the same review and CI requirements as hand-written changes.
+
+## Branch protection
+
+`develop` and `master` are protected branches. Expected GitHub settings:
+
+| Rule | `develop` | `master` |
+|------|-----------|----------|
+| Require pull request before merging | yes | yes |
+| Required approving reviews | ≥ 1 (code owner) | ≥ 1 (code owner) |
+| Required status checks | CI jobs (see below) | CI jobs (see below) |
+| Allow force pushes | no | no |
+| Allow deletions | no | no |
+
+Required CI checks (must be green before merge):
+
+- **pre-commit** — `pre-commit run --all-files` (lint, format, type-check, file hygiene)
+- **offline test matrix** — ruff, mypy, pytest + coverage gate on all supported OS/Python versions
+- **secret scan (gitleaks)** — no credentials in commits
+- **live (secrets)** — live wiki tests when repository secrets are configured; auto-skips on forks
+
+Configure these rules under **Settings → Branches → Branch protection rules** in
+the GitHub repository. This document is the source of truth for what those rules
+should enforce.
 
 ## Branching and releases
 

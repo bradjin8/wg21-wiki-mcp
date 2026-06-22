@@ -1,0 +1,5 @@
+# wg21-wiki-mcp code owners — PRs touching these paths require review.
+
+/src/                    @bradjin8
+/.github/                @bradjin8
+/pyproject.toml          @bradjin8
