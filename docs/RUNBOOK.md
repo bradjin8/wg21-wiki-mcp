@@ -22,7 +22,7 @@ Add a server entry under **Settings → MCP** (or edit your MCP config JSON):
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/cppalliance/wg21-wiki-mcp.git@v0.1.0",
+        "git+https://github.com/cppalliance/wg21-wiki-mcp.git@v0.2.0",
         "wg21-wiki-mcp"
       ],
       "env": {
@@ -34,7 +34,7 @@ Add a server entry under **Settings → MCP** (or edit your MCP config JSON):
 }
 ```
 
-Pin a release tag (`@v0.1.0`) for reproducible behavior. To track the latest
+Pin a release tag (`@v0.2.0`) for reproducible behavior. To track the latest
 release branch, use `@master` and add `"--refresh"` as the first `args` entry.
 
 If you installed the console script locally (`pip install -e ".[dev]"`), use

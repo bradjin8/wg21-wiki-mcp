@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-22
+
 ### Added
 - `errors.py`: centralized error hierarchy (`WikiMcpError`, `AuthError`,
   `PageNotFound`, `FetchError`, `ConfigError`) with documented application
@@ -71,5 +73,6 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `get_recent_changes`, `wiki_status`, with opaque cursor pagination.
 - Verbatim, provenance-bearing responses (canonical + `oldid` URLs, `revid`).
 
-[Unreleased]: https://github.com/cppalliance/wg21-wiki-mcp/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/cppalliance/wg21-wiki-mcp/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/cppalliance/wg21-wiki-mcp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/cppalliance/wg21-wiki-mcp/releases/tag/v0.1.0
