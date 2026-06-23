@@ -46,7 +46,9 @@ pytest -m live --no-cov
 ```
 
 Live tests auto-skip when credentials are absent and must never print or store
-wiki content.
+wiki content. In CI, the canary tier (`pytest -m canary --no-cov`) runs bot login
+plus one read-only tool call; the full live tier runs `pytest -m live --no-cov`.
+Both jobs read credentials from the `live-wiki` GitHub environment.
 
 ## Testing authentication paths
 
@@ -133,8 +135,10 @@ workflow), not by logical groupings — select each check individually in
 
 - **pre-commit**
 - **secret scan (gitleaks)**
-- **live (secrets)** — live wiki tests when repository secrets are configured;
-  auto-skips on forks
+- **canary (secrets)** — minimal live smoke (bot login + one read-only tool) when
+  the `live-wiki` environment secrets are configured; auto-skips on forks
+- **live (secrets)** — full live wiki test suite when the `live-wiki` environment
+  secrets are configured; auto-skips on forks
 - **All 12 offline matrix jobs** (3 OS × 4 Python versions) — each must be
   selected separately:
   - `offline (ubuntu-latest, py3.10)` … `offline (ubuntu-latest, py3.13)`
