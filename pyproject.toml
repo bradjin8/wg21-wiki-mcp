@@ -58,12 +58,20 @@ testpaths = ["tests"]
 addopts = "--cov=wg21_wiki_mcp --cov-branch --cov-report=term-missing --cov-fail-under=95"
 markers = [
     "live: tests that hit the real wiki using configured credentials (skipped without them)",
+    "canary: minimal live smoke (bot login + one read-only tool; subset of live)",
 ]
 
 [tool.coverage.run]
 branch = true
 source = ["wg21_wiki_mcp"]
 omit = ["*/__main__.py"]
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true
+skip_empty = true
+# Per-module floors enforced in CI via `coverage report --include=... --fail-under=...`:
+# wiki_client >= 85%, tools >= 90%, fetch >= 90%, meetings >= 85%.
 
 [tool.ruff]
 line-length = 120

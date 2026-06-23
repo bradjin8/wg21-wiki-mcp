@@ -46,8 +46,10 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install
@@ -60,6 +62,48 @@ jobs:
         run: mypy src
       - name: Tests + coverage gate (offline)
         run: pytest -m "not live"
+      - name: Per-module coverage gates
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: |
+          coverage report --include="*/wiki_client.py" --fail-under=85
+          coverage report --include="*/tools.py" --fail-under=90
+          coverage report --include="*/fetch.py" --fail-under=90
+          coverage report --include="*/meetings.py" --fail-under=85
+      - name: Write coverage XML
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: coverage xml -o coverage.xml
+      - name: Upload coverage artifact
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: coverage-xml
+          path: coverage.xml
+
+  canary:
+    name: canary (secrets)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Personal wiki credentials live in the live-wiki environment (not repo secrets).
+    environment: live-wiki
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Canary smoke (login + one read-only tool; skip if no secrets)
+        env:
+          WIKI_BOT_USERNAME: ${{ secrets.WIKI_BOT_USERNAME }}
+          WIKI_BOT_PASSWORD: ${{ secrets.WIKI_BOT_PASSWORD }}
+          WIKI_USER_USERNAME: ${{ secrets.WIKI_USER_USERNAME }}
+          WIKI_USER_PASSWORD: ${{ secrets.WIKI_USER_PASSWORD }}
+        run: pytest -m canary --no-cov
 
   secret-scan:
     name: secret scan (gitleaks)
@@ -111,17 +155,25 @@ jobs:
   live:
     name: live (secrets)
     runs-on: ubuntu-latest
-    # Live tests use real credentials; they auto-skip when secrets are absent.
+    permissions:
+      contents: read
+    # Personal wiki credentials live in the live-wiki environment (not repo secrets).
+    environment: live-wiki
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
       - name: Install
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
-      - name: Live tests (skip if no secrets; no coverage gate)
+      # --no-cov: offline matrix already enforces the 95% package gate and per-module
+      # floors; live tests hit the real wiki (slow, credential-bound) and must not emit
+      # coverage artifacts that could correlate execution with confidential page access.
+      - name: Live tests (fail when credentials present; skip when absent)
         env:
           WIKI_BOT_USERNAME: ${{ secrets.WIKI_BOT_USERNAME }}
           WIKI_BOT_PASSWORD: ${{ secrets.WIKI_BOT_PASSWORD }}
