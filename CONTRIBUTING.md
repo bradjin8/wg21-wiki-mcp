@@ -125,12 +125,23 @@ Those PRs follow the same review and CI requirements as hand-written changes.
 | Allow force pushes | no | no |
 | Allow deletions | no | no |
 
-Required CI checks (must be green before merge):
+Required CI checks (must be green before merge). GitHub branch protection
+matches checks by their **exact job display name** (the `name:` field in the
+workflow), not by logical groupings — select each check individually in
+**Settings → Branches → Branch protection rules → Require status checks**.
 
-- **pre-commit** — `pre-commit run --all-files` (lint, format, type-check, file hygiene)
-- **offline test matrix** — ruff, mypy, pytest + coverage gate on all supported OS/Python versions
-- **secret scan (gitleaks)** — no credentials in commits
-- **live (secrets)** — live wiki tests when repository secrets are configured; auto-skips on forks
+- **pre-commit**
+- **secret scan (gitleaks)**
+- **live (secrets)** — live wiki tests when repository secrets are configured;
+  auto-skips on forks
+- **All 12 offline matrix jobs** (3 OS × 4 Python versions) — each must be
+  selected separately:
+  - `offline (ubuntu-latest, py3.10)` … `offline (ubuntu-latest, py3.13)`
+  - `offline (windows-latest, py3.10)` … `offline (windows-latest, py3.13)`
+  - `offline (macos-latest, py3.10)` … `offline (macos-latest, py3.13)`
+
+Each offline job runs ruff, mypy, pytest, and the coverage gate on its
+OS/Python combination.
 
 Configure these rules under **Settings → Branches → Branch protection rules** in
 the GitHub repository. This document is the source of truth for what those rules
