@@ -135,6 +135,7 @@ def live_ctx(tmp_path_factory):
 
 # --- wiki_status -----------------------------------------------------------
 @skip_no_creds
+@pytest.mark.canary
 def test_login_succeeds(live_ctx):
     status = tools.wiki_status(live_ctx)
     assert status.authenticated is True
@@ -149,6 +150,7 @@ def test_login_succeeds(live_ctx):
 
 # --- get_page --------------------------------------------------------------
 @skip_no_creds
+@pytest.mark.canary
 def test_fetch_main_page_has_provenance(live_ctx):
     page = tools.get_page(live_ctx, _LIVE_PAGE)
     assert isinstance(page.content, str) and page.content != ""

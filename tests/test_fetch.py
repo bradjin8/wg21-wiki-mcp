@@ -110,6 +110,17 @@ def test_section_cache_miss_then_hit(fetcher_stack):
     assert client.section_fetch_calls == 1
 
 
+def test_section_revalidation_unchanged_revid(fetcher_stack):
+    fetcher, client, _ = fetcher_stack
+    client.pages["P"] = FakePage("body", 1)
+    fetcher.get_page_section("P", 1, ttl_seconds=0)
+    before = client.section_fetch_calls
+    out = fetcher.get_page_section("P", 1, ttl_seconds=0)
+    assert out.from_cache is True
+    assert client.revision_calls >= 1
+    assert client.section_fetch_calls == before
+
+
 def test_section_full_page_cached_separately(fetcher_stack):
     fetcher, client, _ = fetcher_stack
     client.pages["P"] = FakePage("body", 1)

@@ -11,6 +11,9 @@ for the pre-1.0 API stability policy and deprecation timeline.
 ## [Unreleased]
 
 ### Added
+- CI canary smoke gate (`canary (secrets)`) and live tier wired to the `live-wiki`
+  GitHub environment for personal secrets; per-module coverage floors, coverage
+  XML artifact upload, and `@pytest.mark.canary` live smoke tests.
 - `CODEOWNERS`, Dependabot config (weekly pip + GitHub Actions updates), CI
   pre-commit gate, and governance/branch-protection docs in CONTRIBUTING.md.
 - `STABILITY.md`: pre-1.0 API stability tiers, SemVer rules for 0.x, and
