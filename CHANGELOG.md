@@ -6,6 +6,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `CODEOWNERS`, Dependabot config (weekly pip + GitHub Actions updates), CI
+  pre-commit gate, and governance/branch-protection docs in CONTRIBUTING.md.
+
 ## [0.2.0] - 2026-06-22
 
 ### Added
