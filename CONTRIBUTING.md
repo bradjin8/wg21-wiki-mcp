@@ -95,8 +95,57 @@ policy, and what may break.
 ## Pull requests
 
 - Keep changes focused; add tests for new behavior and keep coverage >= 90%.
-- Run ruff, mypy, and the offline suite before opening a PR.
+- Run `pre-commit run --all-files` and the offline suite before opening a PR.
 - Update `CHANGELOG.md` for user-visible changes.
+
+## Governance
+
+This repository is maintained by The C++ Alliance. Review expectations:
+
+- All changes land via pull request against `develop` (release merges use
+  `develop` → `master`).
+- [CODEOWNERS](CODEOWNERS) maps critical paths (`src/`, `.github/`, `pyproject.toml`)
+  to `@bradjin8`; GitHub automatically requests review from those owners.
+- At least **one approving review** from a code owner is required before merge.
+- All CI status checks must pass (see below).
+- Maintainers merge after approval; external contributors cannot self-merge.
+
+Dependabot opens weekly update PRs for Python dependencies and GitHub Actions.
+Those PRs follow the same review and CI requirements as hand-written changes.
+
+## Branch protection
+
+`develop` and `master` are protected branches. Expected GitHub settings:
+
+| Rule | `develop` | `master` |
+|------|-----------|----------|
+| Require pull request before merging | yes | yes |
+| Required approving reviews | ≥ 1 (code owner) | ≥ 1 (code owner) |
+| Required status checks | CI jobs (see below) | CI jobs (see below) |
+| Allow force pushes | no | no |
+| Allow deletions | no | no |
+
+Required CI checks (must be green before merge). GitHub branch protection
+matches checks by their **exact job display name** (the `name:` field in the
+workflow), not by logical groupings — select each check individually in
+**Settings → Branches → Branch protection rules → Require status checks**.
+
+- **pre-commit**
+- **secret scan (gitleaks)**
+- **live (secrets)** — live wiki tests when repository secrets are configured;
+  auto-skips on forks
+- **All 12 offline matrix jobs** (3 OS × 4 Python versions) — each must be
+  selected separately:
+  - `offline (ubuntu-latest, py3.10)` … `offline (ubuntu-latest, py3.13)`
+  - `offline (windows-latest, py3.10)` … `offline (windows-latest, py3.13)`
+  - `offline (macos-latest, py3.10)` … `offline (macos-latest, py3.13)`
+
+Each offline job runs ruff, mypy, pytest, and the coverage gate on its
+OS/Python combination.
+
+Configure these rules under **Settings → Branches → Branch protection rules** in
+the GitHub repository. This document is the source of truth for what those rules
+should enforce.
 
 ## Branching and releases
 
