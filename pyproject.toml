@@ -12,6 +12,7 @@ license = { text = "BSL-1.0" }
 authors = [{ name = "The C++ Alliance, Inc." }]
 keywords = ["mcp", "model-context-protocol", "wg21", "isocpp", "mediawiki"]
 classifiers = [
+    "Development Status :: 3 - Alpha",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
