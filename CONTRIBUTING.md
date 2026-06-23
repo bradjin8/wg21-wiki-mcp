@@ -96,7 +96,8 @@ policy, and what may break.
 
 - Keep changes focused; add tests for new behavior and keep coverage >= 90%.
 - Run `pre-commit run --all-files` and the offline suite before opening a PR.
-- Update `CHANGELOG.md` for user-visible changes.
+- Update `CHANGELOG.md` for user-visible changes (use `### Deprecated` when
+  marking APIs for removal; see [STABILITY.md](STABILITY.md)).
 
 ## Governance
 

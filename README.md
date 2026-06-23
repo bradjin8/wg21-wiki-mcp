@@ -156,8 +156,31 @@ page content.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md#error-contract) for the full invariants.
 
+## Versioning and stability
+
+The package is **0.x Alpha** (`Development Status :: 3 - Alpha`). Until **1.0.0**:
+
+- **Pin a version** in your MCP config (`@v0.2.0` or a PyPI release) so upgrades
+  are deliberate.
+- **Stable:** MCP tool names, tool parameter names/types, application error
+  codes (`1`–`4`, `-32602`), and all `Provenance` fields plus `PageContent.content`
+  / `section` (any other required provenance field is stable too — see
+  [STABILITY.md](STABILITY.md)). Breaking changes to these require deprecation for at
+  least one minor version first.
+- **Unstable:** response-model optional fields, pagination cursor format, on-disk
+  cache layout, internal Python modules, and log message wording may change in
+  any 0.x release without prior deprecation.
+- **0.x minor bumps** (`0.2.0` → `0.3.0`) may add tools or deprecate stable
+  APIs; unstable-tier breaking changes can land without a deprecation period.
+- **0.x patch bumps** are bug fixes and non-contract changes.
+
+Read [STABILITY.md](STABILITY.md) for the full tier list, deprecation process,
+and post-1.0 plans. Check [CHANGELOG.md](CHANGELOG.md) (including `### Deprecated`)
+before upgrading a pinned version.
+
 ## Documentation
 
+- [STABILITY.md](STABILITY.md) - API stability tiers and deprecation policy (pre-1.0).
 - [docs/RUNBOOK.md](docs/RUNBOOK.md) - MCP host setup, troubleshooting, and agent tool-selection guide.
 - [ARCHITECTURE.md](ARCHITECTURE.md) - design, data flow, parse-vs-offload policy, what may break, future work.
 - [CONTRIBUTING.md](CONTRIBUTING.md) - dev setup, tests, confidentiality rules, governance, and where to start reading.

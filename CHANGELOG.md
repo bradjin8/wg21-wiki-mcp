@@ -4,11 +4,24 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+Each release section uses these headings when applicable: `Added`, `Changed`,
+`Deprecated`, `Removed`, `Fixed`, `Security`. See [STABILITY.md](STABILITY.md)
+for the pre-1.0 API stability policy and deprecation timeline.
+
 ## [Unreleased]
 
 ### Added
 - `CODEOWNERS`, Dependabot config (weekly pip + GitHub Actions updates), CI
   pre-commit gate, and governance/branch-protection docs in CONTRIBUTING.md.
+- `STABILITY.md`: pre-1.0 API stability tiers, SemVer rules for 0.x, and
+  deprecation process (minimum one minor version with warning before removal).
+- `wg21_wiki_mcp.deprecation.warn_deprecated()`: `DeprecationWarning` helper
+  for future deprecations.
+- `Development Status :: 3 - Alpha` PyPI classifier and README versioning section.
+
+### Deprecated
+
+_(none)_
 
 ## [0.2.0] - 2026-06-22
 
