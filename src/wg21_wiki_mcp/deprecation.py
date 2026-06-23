@@ -31,4 +31,4 @@ def warn_deprecated(
         parts.append(f"Deprecated since {since}.")
     if removal is not None:
         parts.append(f"Scheduled for removal in {removal}.")
-    warnings.warn(" ".join(parts), DeprecationWarning, stacklevel=2)
+    warnings.warn(" ".join(parts), DeprecationWarning, stacklevel=3)
