@@ -205,6 +205,8 @@ class WikiClient:
         """Call the Action API with retry + automatic re-login on session loss."""
         last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES):
+            retry = False
+            relogin = False
             with self._lock:
                 self._require_open()
                 if self._site is None:
@@ -215,17 +217,22 @@ class WikiClient:
                 except APIError as exc:
                     last_exc = exc
                     if exc.code in _AUTH_ERROR_CODES:
-                        time.sleep(min(2**attempt, 30))
-                        self._relogin()
-                        continue
-                    if exc.code in _BACKOFF_CODES:
-                        time.sleep(min(2**attempt, 30))
-                        continue
-                    raise
+                        retry = True
+                        relogin = True
+                    elif exc.code in _BACKOFF_CODES:
+                        retry = True
+                    else:
+                        raise
                 except (MwClientError, ConnectionError, OSError) as exc:
                     last_exc = exc
-                    time.sleep(min(2**attempt, 30))
-                    continue
+                    retry = True
+            if not retry:
+                break
+            time.sleep(min(2**attempt, 30))
+            if relogin:
+                with self._lock:
+                    self._require_open()
+                    self._relogin()
         if isinstance(last_exc, APIError) and last_exc.code in _AUTH_ERROR_CODES:
             raise AuthError(f"Session could not be re-established after {_MAX_RETRIES} attempts.") from last_exc
         raise FetchError(f"API call '{action}' failed after {_MAX_RETRIES} retries.") from last_exc
