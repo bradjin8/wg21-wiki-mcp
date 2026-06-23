@@ -71,7 +71,7 @@ jobs:
         run: coverage xml -o coverage.xml
       - name: Upload coverage artifact
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
-        uses: actions/upload-artifact@65c4c4a1dd490e5f2cf32f507b53f66c4c95f00c # v4.6.0
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: coverage-xml
           path: coverage.xml
