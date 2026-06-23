@@ -163,8 +163,9 @@ The package is **0.x Alpha** (`Development Status :: 3 - Alpha`). Until **1.0.0*
 - **Pin a version** in your MCP config (`@v0.2.0` or a PyPI release) so upgrades
   are deliberate.
 - **Stable:** MCP tool names, tool parameter names/types, application error
-  codes (`1`–`4`, `-32602`), and the provenance/content fields that define
-  verifiable wiki text. Breaking changes to these require deprecation for at
+  codes (`1`–`4`, `-32602`), and all `Provenance` fields plus `PageContent.content`
+  / `section` (any other required provenance field is stable too — see
+  [STABILITY.md](STABILITY.md)). Breaking changes to these require deprecation for at
   least one minor version first.
 - **Unstable:** response-model optional fields, pagination cursor format, on-disk
   cache layout, internal Python modules, and log message wording may change in

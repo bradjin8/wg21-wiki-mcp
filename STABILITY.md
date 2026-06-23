@@ -36,7 +36,7 @@ Breaking changes require deprecation for **at least one minor version** with a
 | **Tool names** | `search_wiki`, `get_page`, `list_pages`, `list_namespaces`, `list_meetings`, `get_meeting_overview`, `get_meeting_sessions`, `get_recent_changes`, `wiki_status` |
 | **Tool parameters** | Parameter **names** and **types** on each tool (see [server.py](src/wg21_wiki_mcp/server.py)). Optional parameters may gain new defaults; required parameters will not be renamed or removed without deprecation. |
 | **Error codes** | Application codes `1`–`4` (`PAGE_NOT_FOUND`, `AUTH_ERROR`, `FETCH_ERROR`, `CONFIG_ERROR`) and pagination code `-32602` (`INVALID_PARAMS`). Codes are never reused for different meanings. |
-| **Provenance fields** | `Provenance.title`, `Provenance.revid`, `Provenance.url`, `Provenance.oldid_url`, `PageContent.content` — the verifiable-content contract. |
+| **Provenance fields** | All fields on `Provenance` ([models.py](src/wg21_wiki_mcp/models.py)): `requested_title`, `title`, `redirected_from`, `revid`, `last_modified`, `fetched_at`, `url`, `oldid_url`, `from_cache`; plus `PageContent.content` and `PageContent.section`. Together these define the verifiable-content contract. Any other **required** field on `Provenance` or `PageContent` is stable even if not named here. |
 | **Env vars** | `WIKI_BOT_USERNAME`, `WIKI_BOT_PASSWORD`, `WIKI_USER_USERNAME`, `WIKI_USER_PASSWORD`, and documented optional tuning vars in [`.env.example`](.env.example). |
 
 ### Unstable (may change in any 0.x release)
