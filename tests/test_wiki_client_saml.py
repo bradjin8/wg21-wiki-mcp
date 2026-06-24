@@ -55,7 +55,7 @@ def no_sleep(monkeypatch):
 def _user_login_via_saml(client: wc.WikiClient, monkeypatch) -> None:
     """Run the user path with clientlogin disabled and auth check stubbed."""
     monkeypatch.setattr(client, "_new_site", lambda: _saml_site(client))
-    monkeypatch.setattr(client, "_try_clientlogin", lambda _site, _cred: False)
+    monkeypatch.setattr(client, "_try_clientlogin", lambda _site, _cred, *, deadline=None: False)
     monkeypatch.setattr(client, "_is_authenticated", lambda _site: True)
     monkeypatch.setattr(mwclient.Site, "site_init", lambda self: None)
     cred = client._config.user

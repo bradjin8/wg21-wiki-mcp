@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from urllib.parse import quote, urljoin, urlparse
 
@@ -23,6 +25,7 @@ import mwclient
 from mwclient.errors import APIError, MwClientError
 
 from .config import Config, Credentials
+from .deadlines import API_TIMEOUT_MSG, composite_deadline, http_timeout, timeout_remaining
 from .log_safety import auth_path_failure_label, summarize_auth_failures
 from .models import AuthError, FetchError
 
@@ -30,6 +33,7 @@ _AUTH_ERROR_CODES = frozenset({"readapidenied", "assertuserfailed", "notloggedin
 _BACKOFF_CODES = frozenset({"maxlag", "ratelimited"})
 _MAX_RETRIES = 6
 _MAX_TITLES_PER_BATCH = 50  # safe limit for accounts without apihighlimits
+_UNSET_TIMEOUT = object()
 
 
 @dataclass
@@ -81,7 +85,7 @@ class WikiClient:
         return self._active.username if self._active else None
 
     # -- login --------------------------------------------------------------
-    def login(self) -> None:
+    def login(self, *, deadline: float | None = None) -> None:
         """Authenticate using the first credential path that works (bot first).
 
         Raises:
@@ -90,22 +94,27 @@ class WikiClient:
         """
         with self._lock:
             self._require_open()
+            timeout_remaining(deadline, on_exceeded=API_TIMEOUT_MSG)
             path_failures: list[str] = []
             for cred in self._config.ordered_credentials:
+                timeout_remaining(deadline, on_exceeded=API_TIMEOUT_MSG)
                 try:
-                    self._login_with(cred)
+                    self._login_with(cred, deadline=deadline)
                     self._active = cred
                     return
+                except FetchError:
+                    raise
                 except Exception as exc:  # noqa: BLE001 - record and try next path
                     path_failures.append(auth_path_failure_label(cred.label, exc))
             raise AuthError(summarize_auth_failures(path_failures))
 
-    def _relogin(self) -> None:
+    def _relogin(self, *, deadline: float | None = None) -> None:
         """Re-run only the pinned credential path (no re-probing)."""
+        timeout_remaining(deadline, on_exceeded=API_TIMEOUT_MSG)
         if self._active is None:
-            self.login()
+            self.login(deadline=deadline)
             return
-        self._login_with(self._active)
+        self._login_with(self._active, deadline=deadline)
 
     def _new_site(self) -> mwclient.Site:
         return mwclient.Site(
@@ -116,55 +125,90 @@ class WikiClient:
             max_lag=5,
         )
 
-    def _login_with(self, cred: Credentials) -> None:
+    def _login_with(self, cred: Credentials, *, deadline: float | None = None) -> None:
+        timeout_remaining(deadline, on_exceeded=API_TIMEOUT_MSG)
         if cred.label == "bot":
-            self._bot_login(cred)
+            self._bot_login(cred, deadline=deadline)
         else:
-            self._user_login(cred)
+            self._user_login(cred, deadline=deadline)
 
-    def _bot_login(self, cred: Credentials) -> None:
+    @staticmethod
+    def _timeout_remaining(deadline: float | None) -> float | None:
+        """Return seconds left until ``deadline`` (API budget)."""
+        return timeout_remaining(deadline, on_exceeded=API_TIMEOUT_MSG)
+
+    def _http_timeout(self, deadline: float | None, *, cap: float = 30.0) -> float:
+        return http_timeout(deadline, cap=cap, on_exceeded=API_TIMEOUT_MSG)
+
+    @contextmanager
+    def _site_request_timeout(self, site: mwclient.Site, deadline: float | None) -> Iterator[None]:
+        saved_request_timeout: object = _UNSET_TIMEOUT
+        request_opts = getattr(site, "requests", None)
+        request_timeout_modified = False
+        if deadline is not None:
+            remaining = self._timeout_remaining(deadline)
+            if isinstance(request_opts, dict):
+                saved_request_timeout = request_opts.get("timeout", _UNSET_TIMEOUT)
+                request_opts["timeout"] = remaining
+                request_timeout_modified = True
+        try:
+            yield
+        finally:
+            if request_timeout_modified and isinstance(request_opts, dict):
+                if saved_request_timeout is _UNSET_TIMEOUT:
+                    request_opts.pop("timeout", None)
+                else:
+                    request_opts["timeout"] = saved_request_timeout
+
+    def _bot_login(self, cred: Credentials, *, deadline: float | None = None) -> None:
+        self._timeout_remaining(deadline)
         site = self._new_site()
-        site.login(cred.username, cred.password)
+        with self._site_request_timeout(site, deadline):
+            site.login(cred.username, cred.password)
         self._site = site
 
-    def _user_login(self, cred: Credentials) -> None:
+    def _user_login(self, cred: Credentials, *, deadline: float | None = None) -> None:
+        self._timeout_remaining(deadline)
         site = self._new_site()
         # Try local clientlogin first (works only if the wiki allows local login).
-        if self._try_clientlogin(site, cred):
+        if self._try_clientlogin(site, cred, deadline=deadline):
             self._site = site
             return
         # Fall back to the headless SimpleSAMLphp web-SSO flow.
-        self._saml_login(site, cred)
-        site.site_init()
-        if not self._is_authenticated(site):
-            raise AuthError("SAML login completed but the API still sees an anonymous session.")
+        self._saml_login(site, cred, deadline=deadline)
+        with self._site_request_timeout(site, deadline):
+            site.site_init()
+            if not self._is_authenticated(site):
+                raise AuthError("SAML login completed but the API still sees an anonymous session.")
         self._site = site
 
-    def _try_clientlogin(self, site: mwclient.Site, cred: Credentials) -> bool:
+    def _try_clientlogin(self, site: mwclient.Site, cred: Credentials, *, deadline: float | None = None) -> bool:
+        self._timeout_remaining(deadline)
         # Call the API directly: mwclient.clientlogin() calls require(1, 27),
         # which fails on a read-protected wiki before login.
         try:
-            token = site.get_token("login")
-            resp = site.post(
-                "clientlogin",
-                username=cred.username,
-                password=cred.password,
-                logintoken=token,
-                loginreturnurl=f"{self._scheme}://{self._host}",
-            )
+            with self._site_request_timeout(site, deadline):
+                token = site.get_token("login")
+                resp = site.post(
+                    "clientlogin",
+                    username=cred.username,
+                    password=cred.password,
+                    logintoken=token,
+                    loginreturnurl=f"{self._scheme}://{self._host}",
+                )
+                if resp.get("clientlogin", {}).get("status") == "PASS":
+                    site.site_init()
+                    return True
         except (APIError, MwClientError):
             return False
-        if resp.get("clientlogin", {}).get("status") == "PASS":
-            site.site_init()
-            return True
         return False
 
-    def _saml_login(self, site: mwclient.Site, cred: Credentials) -> None:
+    def _saml_login(self, site: mwclient.Site, cred: Credentials, *, deadline: float | None = None) -> None:
         from bs4 import BeautifulSoup  # local import: only needed for the user path
 
         session = site.connection  # reuse mwclient's requests.Session so cookies persist
         start = f"{self._config.base_url}/index.php?title=Special:PluggableAuthLogin"
-        resp = session.get(start, allow_redirects=True, timeout=30)
+        resp = session.get(start, allow_redirects=True, timeout=self._http_timeout(deadline))
 
         soup = BeautifulSoup(resp.text, "lxml")
         form = next((f for f in soup.find_all("form") if f.find("input", {"type": "password"})), None)
@@ -184,7 +228,7 @@ class WikiClient:
         fields[user_field] = cred.username
         fields[pass_field] = cred.password
 
-        posted = session.post(action, data=fields, allow_redirects=True, timeout=30)
+        posted = session.post(action, data=fields, allow_redirects=True, timeout=self._http_timeout(deadline))
         soup2 = BeautifulSoup(posted.text, "lxml")
         saml_form = next((f for f in soup2.find_all("form") if f.find("input", {"name": "SAMLResponse"})), None)
         if saml_form is None:
@@ -193,7 +237,7 @@ class WikiClient:
             return  # the client auto-followed the POST
         acs = urljoin(posted.url, str(saml_form.get("action")))
         payload = {str(i["name"]): str(i.get("value", "")) for i in saml_form.find_all("input") if i.get("name")}
-        session.post(acs, data=payload, allow_redirects=True, timeout=30)
+        session.post(acs, data=payload, allow_redirects=True, timeout=self._http_timeout(deadline))
 
     @staticmethod
     def _is_authenticated(site: mwclient.Site) -> bool:
@@ -201,31 +245,45 @@ class WikiClient:
         return bool(info.get("name")) and "anon" not in info
 
     # -- API call wrapper ---------------------------------------------------
-    def api(self, action: str, **params: object) -> dict:
-        """Call the Action API with retry + automatic re-login on session loss."""
+    def api(self, action: str, *, timeout: float | None = None, **params: object) -> dict:
+        """Call the Action API with retry + automatic re-login on session loss.
+
+        Args:
+            timeout: Optional wall-clock limit in seconds for this call (all
+                retries and backoff sleeps included).
+        """
+        deadline = composite_deadline(timeout) if timeout is not None else None
         last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES):
+            self._timeout_remaining(deadline)
             relogin = False
             with self._lock:
                 self._require_open()
                 if self._site is None:
-                    self.login()
+                    self.login(deadline=deadline)
                 assert self._site is not None  # login() sets the site or raises
-                try:
-                    return self._site.api(action, **params)
-                except APIError as exc:
-                    last_exc = exc
-                    if exc.code in _AUTH_ERROR_CODES:
-                        relogin = True
-                    elif exc.code not in _BACKOFF_CODES:
-                        raise
-                except (MwClientError, ConnectionError, OSError) as exc:
-                    last_exc = exc
-            time.sleep(min(2**attempt, 30))
+                with self._site_request_timeout(self._site, deadline):
+                    try:
+                        return self._site.api(action, **params)
+                    except APIError as exc:
+                        last_exc = exc
+                        if exc.code in _AUTH_ERROR_CODES:
+                            relogin = True
+                        elif exc.code not in _BACKOFF_CODES:
+                            raise
+                    except (MwClientError, ConnectionError, OSError) as exc:
+                        last_exc = exc
+            sleep_s = min(2**attempt, 30)
+            if deadline is not None:
+                remaining = self._timeout_remaining(deadline)
+                assert remaining is not None
+                sleep_s = min(sleep_s, remaining)
+            time.sleep(sleep_s)
             if relogin:
+                self._timeout_remaining(deadline)
                 with self._lock:
                     self._require_open()
-                    self._relogin()
+                    self._relogin(deadline=deadline)
         if isinstance(last_exc, APIError) and last_exc.code in _AUTH_ERROR_CODES:
             raise AuthError(f"Session could not be re-established after {_MAX_RETRIES} attempts.") from last_exc
         raise FetchError(f"API call '{action}' failed after {_MAX_RETRIES} retries.") from last_exc
@@ -243,17 +301,19 @@ class WikiClient:
         return f"{base}&oldid={revid}"
 
     # -- read methods -------------------------------------------------------
-    def fetch_pages(self, titles: list[str]) -> dict[str, FetchedPage]:
+    def fetch_pages(self, titles: list[str], *, timeout: float | None = None) -> dict[str, FetchedPage]:
         """Batch-fetch verbatim wikitext + metadata for many titles at once.
 
         Returns a map keyed by the originally requested title. Handles MediaWiki
         title normalization and redirects so content is attributed correctly.
         """
+        deadline = composite_deadline(timeout) if timeout is not None else None
         results: dict[str, FetchedPage] = {}
         for start in range(0, len(titles), _MAX_TITLES_PER_BATCH):
             batch = titles[start : start + _MAX_TITLES_PER_BATCH]
             resp = self.api(
                 "query",
+                timeout=self._timeout_remaining(deadline),
                 titles="|".join(batch),
                 prop="revisions",
                 rvprop="ids|timestamp|size|content",
@@ -306,10 +366,11 @@ class WikiClient:
             )
         return out
 
-    def fetch_page_section(self, title: str, section: int) -> FetchedPage:
+    def fetch_page_section(self, title: str, section: int, *, timeout: float | None = None) -> FetchedPage:
         """Fetch one section's verbatim wikitext (server-side ``rvsection`` split)."""
         resp = self.api(
             "query",
+            timeout=timeout,
             titles=title,
             prop="revisions",
             rvprop="ids|timestamp|size|content",
@@ -320,12 +381,20 @@ class WikiClient:
         mapped = self._map_batch([title], resp.get("query", {}))
         return mapped.get(title) or FetchedPage(title, title, None, None, None, None, None, True)
 
-    def page_revisions(self, titles: list[str]) -> dict[str, int | None]:
+    def page_revisions(self, titles: list[str], *, timeout: float | None = None) -> dict[str, int | None]:
         """Cheaply fetch current revids (for cache revalidation)."""
+        deadline = composite_deadline(timeout) if timeout is not None else None
         out: dict[str, int | None] = {}
         for start in range(0, len(titles), _MAX_TITLES_PER_BATCH):
             batch = titles[start : start + _MAX_TITLES_PER_BATCH]
-            resp = self.api("query", titles="|".join(batch), prop="revisions", rvprop="ids", redirects=1)
+            resp = self.api(
+                "query",
+                timeout=self._timeout_remaining(deadline),
+                titles="|".join(batch),
+                prop="revisions",
+                rvprop="ids",
+                redirects=1,
+            )
             mapped = self._map_batch(batch, resp.get("query", {}))
             out.update({title: page.revid for title, page in mapped.items()})
         return out
@@ -341,7 +410,7 @@ class WikiClient:
         }
         if namespace is not None:
             params["srnamespace"] = namespace
-        return self.api("query", **params)
+        return self.api("query", timeout=None, **params)
 
     def list_pages(self, *, namespace: int, prefix: str | None, limit: int, cont: str | None) -> dict:
         """Enumerate pages in a namespace via ``allpages``; returns the raw response."""
@@ -354,7 +423,7 @@ class WikiClient:
             params["apprefix"] = prefix
         if cont:
             params["apcontinue"] = cont
-        return self.api("query", **params)
+        return self.api("query", timeout=None, **params)
 
     def list_namespaces(self) -> dict:
         """Return the wiki's namespace table (``siteinfo``) as the raw response."""
@@ -374,14 +443,14 @@ class WikiClient:
             params["rcend"] = since
         if cont:
             params["rccontinue"] = cont
-        return self.api("query", **params)
+        return self.api("query", timeout=None, **params)
 
-    def page_links(self, title: str, *, limit: int, cont: str | None) -> dict:
+    def page_links(self, title: str, *, limit: int, cont: str | None, timeout: float | None = None) -> dict:
         """Fetch the internal links on a page via ``prop=links``; returns the raw response."""
         params: dict[str, object] = {"titles": title, "prop": "links", "pllimit": limit}
         if cont:
             params["plcontinue"] = cont
-        return self.api("query", **params)
+        return self.api("query", timeout=timeout, **params)
 
     def statistics(self) -> dict:
         """Return the wiki's ``siteinfo`` statistics as the raw response."""

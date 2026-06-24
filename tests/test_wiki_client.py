@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 import types
 
 import pytest
@@ -33,6 +34,7 @@ class FakeSite:
         self.clientlogin_status = clientlogin_status
         self._api_func = api_func
         self.login_count = 0
+        self.requests: dict = {}
 
         def _conn_get(*_a, **_k):
             if saml_fails:
@@ -156,13 +158,21 @@ def test_api_sleep_releases_lock_for_concurrent_calls(tmp_path, monkeypatch):
     _patch_sites(monkeypatch, client, [FakeSite(api_func=api_func)])
     client.login()
 
+    errors: list[BaseException] = []
+
     def first_call():
-        assert client.api("query") == {"ok": 1}
+        try:
+            assert client.api("query") == {"ok": 1}
+        except BaseException as exc:  # noqa: BLE001 - collect for assertion
+            errors.append(exc)
 
     def second_call():
-        assert first_at_sleep.wait(timeout=5)
-        assert client.api("query") == {"ok": 1}
-        second_may_proceed.set()
+        try:
+            assert first_at_sleep.wait(timeout=5)
+            assert client.api("query") == {"ok": 1}
+            second_may_proceed.set()
+        except BaseException as exc:  # noqa: BLE001 - collect for assertion
+            errors.append(exc)
 
     t1 = threading.Thread(target=first_call)
     t2 = threading.Thread(target=second_call)
@@ -170,6 +180,7 @@ def test_api_sleep_releases_lock_for_concurrent_calls(tmp_path, monkeypatch):
     t2.start()
     t1.join(timeout=10)
     t2.join(timeout=10)
+    assert not errors, errors
     assert not t1.is_alive()
     assert not t2.is_alive()
     assert calls["n"] >= 2
@@ -217,3 +228,115 @@ def test_page_revisions(tmp_path, monkeypatch):
     _patch_sites(monkeypatch, client, [FakeSite(api_func=api_func)])
     client.login()
     assert client.page_revisions(["P"]) == {"P": 99}
+
+
+def test_api_timeout_raises_fetch_error_after_retry(tmp_path, monkeypatch):
+    """Per-call timeout bounds retries and raises FetchError once the budget is spent."""
+    from wg21_wiki_mcp.models import FetchError
+
+    calls = {"n": 0}
+
+    def api_func(action, params):
+        calls["n"] += 1
+        raise APIError("maxlag", "lag", {})
+
+    base = time.monotonic()
+    ticks = {"n": 0}
+
+    def fake_monotonic():
+        ticks["n"] += 1
+        if ticks["n"] <= 4:
+            return base
+        return base + 100.0
+
+    monkeypatch.setattr(wc.time, "sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr(wc.time, "monotonic", fake_monotonic)
+    client = wc.WikiClient(_config(tmp_path))
+    _patch_sites(monkeypatch, client, [FakeSite(api_func=api_func)])
+    client.login()
+    with pytest.raises(FetchError, match="timed out"):
+        client.api("query", timeout=0.5)
+    assert calls["n"] >= 1
+
+
+def test_api_timeout_restores_absent_request_timeout(tmp_path, monkeypatch):
+    site = FakeSite(api_func=lambda _a, _p: {"ok": 1})
+    client = wc.WikiClient(_config(tmp_path))
+    _patch_sites(monkeypatch, client, [site])
+    client.login()
+    assert "timeout" not in site.requests
+    client.api("query", timeout=0.5)
+    assert "timeout" not in site.requests
+
+
+def test_api_timeout_skips_relogin_when_budget_exhausted(tmp_path, monkeypatch):
+    from wg21_wiki_mcp.models import FetchError
+
+    calls = {"api": 0, "relogin": 0}
+
+    def api_func(action, params):
+        calls["api"] += 1
+        raise APIError("readapidenied", "need read", {})
+
+    site = FakeSite(api_func=api_func)
+    client = wc.WikiClient(_config(tmp_path))
+    _patch_sites(monkeypatch, client, [site, FakeSite(api_func=api_func)])
+
+    real_relogin = client._relogin
+
+    def tracked_relogin(*, deadline=None):
+        calls["relogin"] += 1
+        return real_relogin(deadline=deadline)
+
+    monkeypatch.setattr(client, "_relogin", tracked_relogin)
+
+    base = time.monotonic()
+    ticks = {"n": 0}
+
+    def fake_monotonic():
+        ticks["n"] += 1
+        if ticks["n"] <= 4:
+            return base
+        return base + 100.0
+
+    monkeypatch.setattr(wc.time, "monotonic", fake_monotonic)
+    client.login()
+    with pytest.raises(FetchError, match="timed out"):
+        client.api("query", timeout=0.5)
+    assert calls["api"] >= 1
+    assert calls["relogin"] == 0
+
+
+def test_login_raises_fetch_error_on_timeout(tmp_path, monkeypatch):
+    from wg21_wiki_mcp.models import FetchError
+
+    client = wc.WikiClient(_config(tmp_path, bot=True))
+    base = time.monotonic()
+    ticks = {"n": 0}
+
+    def fake_monotonic():
+        ticks["n"] += 1
+        return base + 100.0 if ticks["n"] > 1 else base
+
+    monkeypatch.setattr(wc.time, "monotonic", fake_monotonic)
+    with pytest.raises(FetchError, match="timed out"):
+        client.login(deadline=base + 0.5)
+
+
+def test_bot_login_applies_site_request_timeout(tmp_path, monkeypatch):
+    site = FakeSite()
+    seen: list[object] = []
+    real_login = site.login
+
+    def tracked_login(u, p):
+        seen.append(site.requests.get("timeout"))
+        return real_login(u, p)
+
+    site.login = tracked_login  # type: ignore[method-assign]
+    client = wc.WikiClient(_config(tmp_path))
+    monkeypatch.setattr(client, "_new_site", lambda: site)
+    cred = client._config.bot
+    assert cred is not None
+    client._bot_login(cred, deadline=time.monotonic() + 5.0)
+    assert seen and seen[0] is not None
+    assert "timeout" not in site.requests
