@@ -49,6 +49,34 @@ def test_concurrent_meeting_sessions_no_deadlock(fake_client, make_ctx):
     assert elapsed < 5  # cache-warm path should not serialize excessively
 
 
+def test_concurrent_meeting_sessions_cold_miss(fake_client, make_ctx):
+    """Concurrent cold get_meeting_sessions calls single-flight outlink discovery."""
+    _meeting_fixture(fake_client)
+    ctx = make_ctx(fake_client, calendar=FakeCalendar(active=True, mode="meeting", ttl_meeting=3600))
+    errors: list[BaseException] = []
+    ready = threading.Barrier(4)
+
+    def worker():
+        try:
+            ready.wait(timeout=5)
+            tools.get_meeting_sessions(ctx)
+        except BaseException as exc:  # noqa: BLE001 - collect for assertion
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    start = time.monotonic()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15)
+    elapsed = time.monotonic() - start
+
+    assert not errors, errors
+    assert not any(t.is_alive() for t in threads)
+    assert fake_client.page_links_calls == 1
+    assert elapsed < 10
+
+
 def test_meeting_sessions_warm_path_skips_outlinks(fake_client, make_ctx):
     """After the first call, a second call within TTL does not hit page_links."""
     _meeting_fixture(fake_client)

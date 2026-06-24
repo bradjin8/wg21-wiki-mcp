@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from datetime import datetime, timezone
 
 from .context import ServerContext
@@ -46,6 +47,8 @@ _DEFAULT_BUNDLE_PAGE_MAX_BYTES = 8 * 1024
 _MAX_LIST_LIMIT = 50
 _MAX_NS_PAGE_LIMIT = 500
 _OUTLINKS_KEY_SEP = "\0outlinks="
+_outlinks_locks: dict[str, threading.Lock] = {}
+_outlinks_lock_guard = threading.Lock()
 
 
 def _clamp(value: int, lo: int, hi: int) -> int:
@@ -81,19 +84,25 @@ def _cached_page_outlinks(ctx: ServerContext, title: str, *, cap: int = 500) -> 
     if entry is not None and entry.age_seconds() < ttl_seconds:
         return json.loads(entry.content)
 
-    links = _page_outlinks(ctx, title, cap=cap)
-    fetched_at = datetime.now(timezone.utc).isoformat()
-    ctx.cache.put(
-        requested_title=key,
-        title=title,
-        redirected_from=None,
-        revid=None,
-        timestamp=None,
-        size=None,
-        content=json.dumps(links),
-        fetched_at=fetched_at,
-    )
-    return links
+    with _outlinks_lock_guard:
+        lock = _outlinks_locks.setdefault(key, threading.Lock())
+    with lock:
+        entry = ctx.cache.get(key)
+        if entry is not None and entry.age_seconds() < ttl_seconds:
+            return json.loads(entry.content)
+        links = _page_outlinks(ctx, title, cap=cap)
+        fetched_at = datetime.now(timezone.utc).isoformat()
+        ctx.cache.put(
+            requested_title=key,
+            title=title,
+            redirected_from=None,
+            revid=None,
+            timestamp=None,
+            size=None,
+            content=json.dumps(links),
+            fetched_at=fetched_at,
+        )
+        return links
 
 
 def _lookup_namespace_name(ctx: ServerContext, namespace_id: int) -> str | None:

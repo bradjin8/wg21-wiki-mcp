@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 from conftest import FakePage, FakeWikiClient
@@ -151,15 +152,15 @@ def test_inproc_lock_map_bounded(tmp_path, monkeypatch):
 def test_get_pages_max_wait_raises_when_deadline_exceeded(fetcher_stack, monkeypatch):
     fetcher, client, _ = fetcher_stack
     client.pages["P"] = FakePage("body", 1)
-    real_remaining = PageFetcher._timeout_remaining
-    calls = {"n": 0}
+    base = time.monotonic()
+    ticks = {"n": 0}
 
-    def fake_remaining(deadline):
-        calls["n"] += 1
-        if calls["n"] >= 2:
-            raise FetchError("Page fetch timed out waiting for the wiki.")
-        return real_remaining(deadline)
+    def fake_monotonic():
+        ticks["n"] += 1
+        if ticks["n"] <= 2:
+            return base
+        return base + 100.0
 
-    monkeypatch.setattr(PageFetcher, "_timeout_remaining", staticmethod(fake_remaining))
+    monkeypatch.setattr("wg21_wiki_mcp.fetch.time.monotonic", fake_monotonic)
     with pytest.raises(FetchError, match="timed out"):
-        fetcher.get_pages(["P"], ttl_seconds=1000, max_wait_s=30.0)
+        fetcher.get_pages(["P"], ttl_seconds=1000, max_wait_s=0.5)

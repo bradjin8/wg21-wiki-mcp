@@ -98,8 +98,8 @@ class PageFetcher:
 
         stale = entry
         with ExitStack() as stack:
-            self._acquire_inproc(stack, [key])
-            self._acquire_cross_process(stack, [key])
+            self._acquire_inproc(stack, [key], deadline=None)
+            self._acquire_cross_process(stack, [key], deadline=None)
 
             if not refresh:
                 entry = self._cache.get(key)
@@ -180,8 +180,8 @@ class PageFetcher:
     ) -> None:
         self._timeout_remaining(deadline)
         with ExitStack() as stack:
-            self._acquire_inproc(stack, sorted(titles))
-            self._acquire_cross_process(stack, sorted(titles))
+            self._acquire_inproc(stack, sorted(titles), deadline)
+            self._acquire_cross_process(stack, sorted(titles), deadline)
 
             self._timeout_remaining(deadline)
 
@@ -249,7 +249,7 @@ class PageFetcher:
             outcomes[title] = _from_entry(entry, from_cache=False)
 
     # -- locking helpers ----------------------------------------------------
-    def _acquire_inproc(self, stack: ExitStack, titles: list[str]) -> None:
+    def _acquire_inproc(self, stack: ExitStack, titles: list[str], deadline: float | None) -> None:
         for title in titles:
             with self._inproc_guard:
                 slot = self._inproc_locks.get(title)
@@ -258,7 +258,13 @@ class PageFetcher:
                     self._inproc_locks[title] = slot
                 slot.users += 1
                 lock = slot.lock
-            lock.acquire()
+            if deadline is not None:
+                remaining = self._timeout_remaining(deadline)
+                assert remaining is not None
+                if not lock.acquire(timeout=remaining):
+                    raise FetchError("Page fetch timed out waiting for the wiki.")
+            else:
+                lock.acquire()
             stack.callback(self._release_inproc, title, lock)
 
     def _release_inproc(self, title: str, lock: threading.Lock) -> None:
@@ -282,13 +288,16 @@ class PageFetcher:
             if len(self._inproc_locks) <= _MAX_INPROC_LOCK_ENTRIES:
                 return
 
-    def _acquire_cross_process(self, stack: ExitStack, titles: list[str]) -> None:
+    def _acquire_cross_process(self, stack: ExitStack, titles: list[str], deadline: float | None) -> None:
         for title in titles:
             lock = FileLock(str(self._cache.lock_path(title)))
+            lock_timeout = self._timeout_remaining(deadline) if deadline is not None else _LOCK_TIMEOUT_S
             try:
-                lock.acquire(timeout=_LOCK_TIMEOUT_S)
+                lock.acquire(timeout=lock_timeout)
                 stack.enter_context(_released(lock))
             except Timeout as exc:
+                if deadline is not None:
+                    raise FetchError("Page fetch timed out waiting for the wiki.") from exc
                 # Another process is taking unusually long; proceed without the
                 # cross-process lock rather than hang. The re-check after this
                 # still prevents redundant work in the common case.

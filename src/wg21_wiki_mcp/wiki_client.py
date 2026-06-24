@@ -228,6 +228,13 @@ class WikiClient:
                 if self._site is None:
                     self.login()
                 assert self._site is not None  # login() sets the site or raises
+                saved_request_timeout: object | None = None
+                request_opts = getattr(self._site, "requests", None)
+                if deadline is not None:
+                    remaining = self._timeout_remaining(deadline)
+                    if isinstance(request_opts, dict):
+                        saved_request_timeout = request_opts.get("timeout")
+                        request_opts["timeout"] = remaining
                 try:
                     return self._site.api(action, **params)
                 except APIError as exc:
@@ -238,6 +245,9 @@ class WikiClient:
                         raise
                 except (MwClientError, ConnectionError, OSError) as exc:
                     last_exc = exc
+                finally:
+                    if saved_request_timeout is not None and isinstance(request_opts, dict):
+                        request_opts["timeout"] = saved_request_timeout
             sleep_s = min(2**attempt, 30)
             if deadline is not None:
                 remaining = self._timeout_remaining(deadline)

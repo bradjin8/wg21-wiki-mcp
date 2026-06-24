@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 import types
 
 import pytest
@@ -156,13 +157,21 @@ def test_api_sleep_releases_lock_for_concurrent_calls(tmp_path, monkeypatch):
     _patch_sites(monkeypatch, client, [FakeSite(api_func=api_func)])
     client.login()
 
+    errors: list[BaseException] = []
+
     def first_call():
-        assert client.api("query") == {"ok": 1}
+        try:
+            assert client.api("query") == {"ok": 1}
+        except BaseException as exc:  # noqa: BLE001 - collect for assertion
+            errors.append(exc)
 
     def second_call():
-        assert first_at_sleep.wait(timeout=5)
-        assert client.api("query") == {"ok": 1}
-        second_may_proceed.set()
+        try:
+            assert first_at_sleep.wait(timeout=5)
+            assert client.api("query") == {"ok": 1}
+            second_may_proceed.set()
+        except BaseException as exc:  # noqa: BLE001 - collect for assertion
+            errors.append(exc)
 
     t1 = threading.Thread(target=first_call)
     t2 = threading.Thread(target=second_call)
@@ -170,6 +179,7 @@ def test_api_sleep_releases_lock_for_concurrent_calls(tmp_path, monkeypatch):
     t2.start()
     t1.join(timeout=10)
     t2.join(timeout=10)
+    assert not errors, errors
     assert not t1.is_alive()
     assert not t2.is_alive()
     assert calls["n"] >= 2
@@ -219,16 +229,30 @@ def test_page_revisions(tmp_path, monkeypatch):
     assert client.page_revisions(["P"]) == {"P": 99}
 
 
-def test_api_timeout_raises_fetch_error(tmp_path, monkeypatch):
-    """Per-call timeout bounds all retries and raises FetchError."""
+def test_api_timeout_raises_fetch_error_after_retry(tmp_path, monkeypatch):
+    """Per-call timeout bounds retries and raises FetchError once the budget is spent."""
     from wg21_wiki_mcp.models import FetchError
 
+    calls = {"n": 0}
+
     def api_func(action, params):
+        calls["n"] += 1
         raise APIError("maxlag", "lag", {})
 
+    base = time.monotonic()
+    ticks = {"n": 0}
+
+    def fake_monotonic():
+        ticks["n"] += 1
+        if ticks["n"] <= 4:
+            return base
+        return base + 100.0
+
     monkeypatch.setattr(wc.time, "sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr(wc.time, "monotonic", fake_monotonic)
     client = wc.WikiClient(_config(tmp_path))
     _patch_sites(monkeypatch, client, [FakeSite(api_func=api_func)])
     client.login()
     with pytest.raises(FetchError, match="timed out"):
-        client.api("query", timeout=0)
+        client.api("query", timeout=0.5)
+    assert calls["n"] >= 1

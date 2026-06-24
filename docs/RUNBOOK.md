@@ -157,8 +157,10 @@ change returned wikitext.
 - The page bundle fetch is bounded to **30 seconds** total wait; if locks or
   upstream API calls exceed that, the tool raises `FETCH_ERROR` (code 3) instead
   of blocking other tools indefinitely.
-- `WikiClient.api()` accepts an optional per-call timeout and releases the client
-  lock before retry backoff sleep so one slow response does not stall all nine tools.
+- `WikiClient.api()` accepts an optional per-call timeout, applies it to the
+  underlying mwclient HTTP request, and releases the client lock before retry
+  backoff sleep. Upstream requests still serialize on the lock; only the sleep
+  between retries runs concurrently with other tools.
 
 **Expected latency:** See the "Meeting-time performance" table in
 [ARCHITECTURE.md](../ARCHITECTURE.md). Cache-warm repeats are typically sub-second;
