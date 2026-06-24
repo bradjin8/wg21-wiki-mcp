@@ -141,9 +141,10 @@ def _page_outlinks(
     links: list[str] = []
     cont: str | None = None
     while len(links) < cap:
+        batch_limit = min(500, cap - len(links))
         resp = ctx.client.page_links(
             title,
-            limit=500,
+            limit=batch_limit,
             cont=cont,
             timeout=_remaining(deadline),
         )
@@ -151,6 +152,12 @@ def _page_outlinks(
             for link in page.get("links", []):
                 if link.get("ns", 0) >= 0:
                     links.append(link["title"])
+                    if len(links) >= cap:
+                        break
+            if len(links) >= cap:
+                break
+        if len(links) >= cap:
+            break
         cont = resp.get("continue", {}).get("plcontinue")
         if not cont:
             break

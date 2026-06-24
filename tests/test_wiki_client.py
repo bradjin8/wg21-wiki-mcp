@@ -34,6 +34,7 @@ class FakeSite:
         self.clientlogin_status = clientlogin_status
         self._api_func = api_func
         self.login_count = 0
+        self.requests: dict = {}
 
         def _conn_get(*_a, **_k):
             if saml_fails:
@@ -256,3 +257,51 @@ def test_api_timeout_raises_fetch_error_after_retry(tmp_path, monkeypatch):
     with pytest.raises(FetchError, match="timed out"):
         client.api("query", timeout=0.5)
     assert calls["n"] >= 1
+
+
+def test_api_timeout_restores_absent_request_timeout(tmp_path, monkeypatch):
+    site = FakeSite(api_func=lambda _a, _p: {"ok": 1})
+    client = wc.WikiClient(_config(tmp_path))
+    _patch_sites(monkeypatch, client, [site])
+    client.login()
+    assert "timeout" not in site.requests
+    client.api("query", timeout=0.5)
+    assert "timeout" not in site.requests
+
+
+def test_api_timeout_skips_relogin_when_budget_exhausted(tmp_path, monkeypatch):
+    from wg21_wiki_mcp.models import FetchError
+
+    calls = {"api": 0, "relogin": 0}
+
+    def api_func(action, params):
+        calls["api"] += 1
+        raise APIError("readapidenied", "need read", {})
+
+    site = FakeSite(api_func=api_func)
+    client = wc.WikiClient(_config(tmp_path))
+    _patch_sites(monkeypatch, client, [site, FakeSite(api_func=api_func)])
+
+    real_relogin = client._relogin
+
+    def tracked_relogin(*, deadline=None):
+        calls["relogin"] += 1
+        return real_relogin(deadline=deadline)
+
+    monkeypatch.setattr(client, "_relogin", tracked_relogin)
+
+    base = time.monotonic()
+    ticks = {"n": 0}
+
+    def fake_monotonic():
+        ticks["n"] += 1
+        if ticks["n"] <= 4:
+            return base
+        return base + 100.0
+
+    monkeypatch.setattr(wc.time, "monotonic", fake_monotonic)
+    client.login()
+    with pytest.raises(FetchError, match="timed out"):
+        client.api("query", timeout=0.5)
+    assert calls["api"] >= 1
+    assert calls["relogin"] == 0
