@@ -205,7 +205,6 @@ class WikiClient:
         """Call the Action API with retry + automatic re-login on session loss."""
         last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES):
-            retry = False
             relogin = False
             with self._lock:
                 self._require_open()
@@ -217,17 +216,11 @@ class WikiClient:
                 except APIError as exc:
                     last_exc = exc
                     if exc.code in _AUTH_ERROR_CODES:
-                        retry = True
                         relogin = True
-                    elif exc.code in _BACKOFF_CODES:
-                        retry = True
-                    else:
+                    elif exc.code not in _BACKOFF_CODES:
                         raise
                 except (MwClientError, ConnectionError, OSError) as exc:
                     last_exc = exc
-                    retry = True
-            if not retry:
-                break
             time.sleep(min(2**attempt, 30))
             if relogin:
                 with self._lock:
