@@ -25,6 +25,8 @@ for the pre-1.0 API stability policy and deprecation timeline.
   tools, `PageFetcher.get_pages(max_wait_s=…)` (default 30s for
   `get_meeting_sessions`), and optional per-call `WikiClient.api(timeout=…)`.
   Documented in ARCHITECTURE.md and docs/RUNBOOK.md.
+- Debug log when stale outlink index is served after lock contention or discovery
+  timeout (`title_hash` only; no page titles in logs).
 
 ### Fixed
 - `WikiClient.api()`: release the RLock before retry backoff sleep so concurrent

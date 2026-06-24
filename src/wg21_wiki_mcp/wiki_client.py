@@ -25,6 +25,7 @@ import mwclient
 from mwclient.errors import APIError, MwClientError
 
 from .config import Config, Credentials
+from .deadlines import API_TIMEOUT_MSG, composite_deadline, http_timeout, timeout_remaining
 from .log_safety import auth_path_failure_label, summarize_auth_failures
 from .models import AuthError, FetchError
 
@@ -93,10 +94,10 @@ class WikiClient:
         """
         with self._lock:
             self._require_open()
-            self._timeout_remaining(deadline)
+            timeout_remaining(deadline, on_exceeded=API_TIMEOUT_MSG)
             path_failures: list[str] = []
             for cred in self._config.ordered_credentials:
-                self._timeout_remaining(deadline)
+                timeout_remaining(deadline, on_exceeded=API_TIMEOUT_MSG)
                 try:
                     self._login_with(cred, deadline=deadline)
                     self._active = cred
@@ -109,7 +110,7 @@ class WikiClient:
 
     def _relogin(self, *, deadline: float | None = None) -> None:
         """Re-run only the pinned credential path (no re-probing)."""
-        self._timeout_remaining(deadline)
+        timeout_remaining(deadline, on_exceeded=API_TIMEOUT_MSG)
         if self._active is None:
             self.login(deadline=deadline)
             return
@@ -125,7 +126,7 @@ class WikiClient:
         )
 
     def _login_with(self, cred: Credentials, *, deadline: float | None = None) -> None:
-        self._timeout_remaining(deadline)
+        timeout_remaining(deadline, on_exceeded=API_TIMEOUT_MSG)
         if cred.label == "bot":
             self._bot_login(cred, deadline=deadline)
         else:
@@ -133,19 +134,11 @@ class WikiClient:
 
     @staticmethod
     def _timeout_remaining(deadline: float | None) -> float | None:
-        """Return seconds left until ``deadline``, or raise if it has passed."""
-        if deadline is None:
-            return None
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise FetchError("API call timed out.")
-        return remaining
+        """Return seconds left until ``deadline`` (API budget)."""
+        return timeout_remaining(deadline, on_exceeded=API_TIMEOUT_MSG)
 
     def _http_timeout(self, deadline: float | None, *, cap: float = 30.0) -> float:
-        remaining = self._timeout_remaining(deadline)
-        if remaining is None:
-            return cap
-        return min(remaining, cap)
+        return http_timeout(deadline, cap=cap, on_exceeded=API_TIMEOUT_MSG)
 
     @contextmanager
     def _site_request_timeout(self, site: mwclient.Site, deadline: float | None) -> Iterator[None]:
@@ -259,7 +252,7 @@ class WikiClient:
             timeout: Optional wall-clock limit in seconds for this call (all
                 retries and backoff sleeps included).
         """
-        deadline = time.monotonic() + timeout if timeout is not None else None
+        deadline = composite_deadline(timeout) if timeout is not None else None
         last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES):
             self._timeout_remaining(deadline)
@@ -314,7 +307,7 @@ class WikiClient:
         Returns a map keyed by the originally requested title. Handles MediaWiki
         title normalization and redirects so content is attributed correctly.
         """
-        deadline = time.monotonic() + timeout if timeout is not None else None
+        deadline = composite_deadline(timeout) if timeout is not None else None
         results: dict[str, FetchedPage] = {}
         for start in range(0, len(titles), _MAX_TITLES_PER_BATCH):
             batch = titles[start : start + _MAX_TITLES_PER_BATCH]
@@ -390,7 +383,7 @@ class WikiClient:
 
     def page_revisions(self, titles: list[str], *, timeout: float | None = None) -> dict[str, int | None]:
         """Cheaply fetch current revids (for cache revalidation)."""
-        deadline = time.monotonic() + timeout if timeout is not None else None
+        deadline = composite_deadline(timeout) if timeout is not None else None
         out: dict[str, int | None] = {}
         for start in range(0, len(titles), _MAX_TITLES_PER_BATCH):
             batch = titles[start : start + _MAX_TITLES_PER_BATCH]

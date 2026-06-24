@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from filelock import FileLock, Timeout
 
 from .cache import Cache, CacheEntry, title_hash
+from .deadlines import timeout_remaining
 from .log import get_logger
 from .log_safety import safe_exception_summary
 from .models import FetchError
@@ -77,9 +78,16 @@ class PageFetcher:
         self._inproc_locks: dict[str, _InprocLockSlot] = {}
         self._inproc_guard = threading.Lock()
 
-    def get_page(self, title: str, *, ttl_seconds: int, refresh: bool = False) -> FetchOutcome:
+    def get_page(
+        self,
+        title: str,
+        *,
+        ttl_seconds: int,
+        refresh: bool = False,
+        max_wait_s: float | None = None,
+    ) -> FetchOutcome:
         """Resolve a single page (cache-first, then fetch). See :meth:`get_pages`."""
-        return self.get_pages([title], ttl_seconds=ttl_seconds, refresh=refresh)[title]
+        return self.get_pages([title], ttl_seconds=ttl_seconds, refresh=refresh, max_wait_s=max_wait_s)[title]
 
     def get_page_section(
         self,
@@ -160,15 +168,6 @@ class PageFetcher:
             self._resolve_network(need_network, stale, ttl_seconds, refresh, outcomes, deadline)
         return outcomes
 
-    @staticmethod
-    def _timeout_remaining(deadline: float | None) -> float | None:
-        if deadline is None:
-            return None
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise FetchError("Page fetch timed out waiting for the wiki.")
-        return remaining
-
     def _resolve_network(
         self,
         titles: list[str],
@@ -178,12 +177,12 @@ class PageFetcher:
         outcomes: dict[str, FetchOutcome],
         deadline: float | None = None,
     ) -> None:
-        self._timeout_remaining(deadline)
+        timeout_remaining(deadline)
         with ExitStack() as stack:
             self._acquire_inproc(stack, sorted(titles), deadline)
             self._acquire_cross_process(stack, sorted(titles), deadline)
 
-            self._timeout_remaining(deadline)
+            timeout_remaining(deadline)
 
             # Re-check the cache: another process may have filled it while we waited.
             still: list[str] = []
@@ -211,7 +210,7 @@ class PageFetcher:
         candidates = [t for t in titles if not refresh and t in stale and stale[t].revid is not None]
         if not candidates:
             return to_fetch
-        current = self._client.page_revisions(candidates, timeout=self._timeout_remaining(deadline))
+        current = self._client.page_revisions(candidates, timeout=timeout_remaining(deadline))
         for title in candidates:
             entry = stale[title]
             if current.get(title) is not None and current[title] == entry.revid:
@@ -230,7 +229,7 @@ class PageFetcher:
         if not titles:
             return
         fetched_at = datetime.now(timezone.utc).isoformat()
-        fetched = self._client.fetch_pages(titles, timeout=self._timeout_remaining(deadline))
+        fetched = self._client.fetch_pages(titles, timeout=timeout_remaining(deadline))
         for title in titles:
             page = fetched.get(title)
             if page is None or page.missing or page.content is None:
@@ -259,7 +258,7 @@ class PageFetcher:
                 slot.users += 1
                 lock = slot.lock
             if deadline is not None:
-                remaining = self._timeout_remaining(deadline)
+                remaining = timeout_remaining(deadline)
                 assert remaining is not None
                 if not lock.acquire(timeout=remaining):
                     raise FetchError("Page fetch timed out waiting for the wiki.")
@@ -291,7 +290,7 @@ class PageFetcher:
     def _acquire_cross_process(self, stack: ExitStack, titles: list[str], deadline: float | None) -> None:
         for title in titles:
             lock = FileLock(str(self._cache.lock_path(title)))
-            lock_timeout = self._timeout_remaining(deadline) if deadline is not None else _LOCK_TIMEOUT_S
+            lock_timeout = timeout_remaining(deadline) if deadline is not None else _LOCK_TIMEOUT_S
             try:
                 lock.acquire(timeout=lock_timeout)
                 stack.enter_context(_released(lock))

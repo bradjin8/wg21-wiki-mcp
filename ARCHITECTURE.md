@@ -92,7 +92,7 @@ server mitigates stall amplification as follows:
 | Path | Normal TTL | Meeting TTL | Notes |
 |------|------------|-------------|-------|
 | Single-page tools (`get_page`, etc.) | cache hit: ~ms | cache hit: ~ms | Miss: one batched API call per title (≤50 titles/request). |
-| `get_meeting_overview` | outlink index cached with TTL | same | First call enumerates links; repeats within TTL skip `prop=links`. |
+| `get_meeting_overview` | home page + outlink index cached with TTL | same | Home fetch and outlink discovery share one **30s** composite wait (`DEFAULT_COMPOSITE_MAX_WAIT_S`). |
 | `get_meeting_sessions` | outlink index cached + page bundle | same | Outlink discovery is cached separately from page bodies; page fetch capped at **30s** total wait (`DEFAULT_COMPOSITE_MAX_WAIT_S`). |
 | `WikiClient.api()` | retries with lock released during backoff | same | Optional per-call `timeout=` bounds all retries; raises `FetchError` when exceeded. |
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 
 import pytest
@@ -353,7 +354,7 @@ def test_cached_outlinks_stale_fallback_on_timeout(fake_client, make_ctx, monkey
     def fake_monotonic():
         return base + 100.0
 
-    monkeypatch.setattr(tools.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr("wg21_wiki_mcp.deadlines.time.monotonic", fake_monotonic)
     links = tools._cached_page_outlinks(ctx, "2026-06 Alpha", deadline=base + 0.5)
     assert links == stale
     assert fake_client.page_links_calls == 0
@@ -372,9 +373,28 @@ def test_outlinks_lock_map_bounded(fake_client, make_ctx, monkeypatch):
 def test_cached_outlinks_raises_without_stale_on_timeout(fake_client, make_ctx, monkeypatch):
     ctx = make_ctx(fake_client)
     base = time.monotonic()
-    monkeypatch.setattr(tools.time, "monotonic", lambda: base + 100.0)
+    monkeypatch.setattr("wg21_wiki_mcp.deadlines.time.monotonic", lambda: base + 100.0)
     with pytest.raises(FetchError, match="timed out"):
         tools._cached_page_outlinks(ctx, "2026-06 Alpha", deadline=base + 0.5)
+
+
+def test_stale_outlinks_serve_logs_debug(fake_client, make_ctx, monkeypatch, caplog):
+    caplog.set_level(logging.DEBUG, logger="wg21_wiki_mcp.tools")
+    ctx = make_ctx(fake_client)
+    page_title = "2026-06 Alpha"
+    stale = ["2026-06 Alpha:Cached"]
+    _seed_stale_outlink_cache(ctx, page_title, stale)
+
+    def fail_outlinks(*_a, **_k):
+        raise FetchError("discovery timed out")
+
+    monkeypatch.setattr(tools, "_page_outlinks", fail_outlinks)
+    tools._cached_page_outlinks(ctx, page_title, deadline=time.monotonic() + 30)
+
+    assert page_title not in caplog.text
+    assert "stale outlink" in caplog.text.lower()
+    assert "title_hash=" in caplog.text
+    assert "discovery_timeout" in caplog.text
 
 
 def test_cached_outlinks_stale_on_discovery_failure(fake_client, make_ctx, monkeypatch):

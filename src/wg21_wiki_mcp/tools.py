@@ -11,12 +11,13 @@ from __future__ import annotations
 import json
 import re
 import threading
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Literal
 
-from .cache import CacheEntry
+from .cache import CacheEntry, title_hash
 from .context import ServerContext
+from .deadlines import MEETING_TOOL_TIMEOUT_MSG, composite_deadline, timeout_remaining
 from .fetch import DEFAULT_COMPOSITE_MAX_WAIT_S
 from .log import get_logger
 from .log_safety import safe_exception_summary
@@ -66,17 +67,8 @@ _outlinks_locks: dict[str, _OutlinksLockSlot] = {}
 _outlinks_lock_guard = threading.Lock()
 
 
-def _composite_deadline(max_wait_s: float) -> float:
-    return time.monotonic() + max_wait_s
-
-
 def _remaining(deadline: float | None) -> float | None:
-    if deadline is None:
-        return None
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        raise FetchError("Meeting tool timed out waiting for the wiki.")
-    return remaining
+    return timeout_remaining(deadline, on_exceeded=MEETING_TOOL_TIMEOUT_MSG)
 
 
 def _evict_idle_outlinks_locks() -> None:
@@ -168,6 +160,23 @@ def _load_outlinks(entry: CacheEntry) -> list[str]:
     return json.loads(entry.content)
 
 
+def _serve_stale_outlinks(
+    entry: CacheEntry,
+    title: str,
+    *,
+    reason: Literal["lock_contention", "discovery_timeout"],
+) -> list[str]:
+    links = _load_outlinks(entry)
+    logger.debug(
+        "Serving stale outlink index (title_hash=%s, reason=%s, link_count=%d, age_s=%.1f)",
+        title_hash(title),
+        reason,
+        len(links),
+        entry.age_seconds(),
+    )
+    return links
+
+
 def _cached_page_outlinks(
     ctx: ServerContext,
     title: str,
@@ -187,7 +196,7 @@ def _cached_page_outlinks(
         lock = _acquire_outlinks_lock(key, deadline)
     except FetchError:
         if stale_entry is not None:
-            return _load_outlinks(stale_entry)
+            return _serve_stale_outlinks(stale_entry, title, reason="lock_contention")
         raise
     try:
         entry = ctx.cache.get(key)
@@ -199,7 +208,7 @@ def _cached_page_outlinks(
             links = _page_outlinks(ctx, title, cap=cap, deadline=deadline)
         except FetchError:
             if stale_entry is not None:
-                return _load_outlinks(stale_entry)
+                return _serve_stale_outlinks(stale_entry, title, reason="discovery_timeout")
             raise
         fetched_at = datetime.now(timezone.utc).isoformat()
         ctx.cache.put(
@@ -278,6 +287,7 @@ def get_page(
     max_bytes: int = _DEFAULT_PAGE_MAX_BYTES,
     cursor: str | None = None,
     refresh: bool = False,
+    max_wait_s: float | None = None,
 ) -> PageContent:
     """Return verbatim wikitext for a page (or one section), chunked if large.
 
@@ -295,7 +305,12 @@ def get_page(
             refresh=refresh,
         )
     else:
-        outcome = ctx.fetcher.get_page(title, ttl_seconds=ctx.current_ttl(), refresh=refresh)
+        outcome = ctx.fetcher.get_page(
+            title,
+            ttl_seconds=ctx.current_ttl(),
+            refresh=refresh,
+            max_wait_s=max_wait_s,
+        )
     if outcome.missing or outcome.content is None:
         if section is not None:
             raise PageNotFound(f"Page or section not found: {title!r} section {section}")
@@ -458,9 +473,9 @@ def get_recent_changes(
 # --------------------------------------------------------------------------- #
 def get_meeting_overview(ctx: ServerContext, meeting: str | None = None) -> MeetingOverview:
     """Return a meeting's landing page (verbatim) plus its deterministic outlink index."""
-    deadline = _composite_deadline(DEFAULT_COMPOSITE_MAX_WAIT_S)
+    deadline = composite_deadline(DEFAULT_COMPOSITE_MAX_WAIT_S)
     title = _resolve_meeting(ctx, meeting)
-    home = get_page(ctx, title)
+    home = get_page(ctx, title, max_wait_s=_remaining(deadline))
     outlinks = [
         PageRef(title=t, url=ctx.client.canonical_url(t))
         for t in _cached_page_outlinks(ctx, title, deadline=deadline)
@@ -489,7 +504,7 @@ def get_meeting_sessions(
     title = _resolve_meeting(ctx, meeting)
     max_page_bytes = _clamp(max_page_bytes, 512, 64 * 1024)
     group_tokens = [g.lower() for g in (groups or [])]
-    deadline = _composite_deadline(DEFAULT_COMPOSITE_MAX_WAIT_S)
+    deadline = composite_deadline(DEFAULT_COMPOSITE_MAX_WAIT_S)
 
     candidates = [t for t in _cached_page_outlinks(ctx, title, deadline=deadline) if t.startswith(title)]
     fetched = (
