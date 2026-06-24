@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import types
 
 import pytest
@@ -130,6 +131,48 @@ def test_relogin_on_readapidenied(tmp_path, monkeypatch):
     result = client.api("query")
     assert result == {"ok": "after-relogin"}
     assert calls["n"] == 2  # failed once, retried after re-login
+
+
+def test_api_sleep_releases_lock_for_concurrent_calls(tmp_path, monkeypatch):
+    """A second api() call can proceed while the first sleeps between retries."""
+    first_at_sleep = threading.Event()
+    second_may_proceed = threading.Event()
+    calls = {"n": 0}
+
+    def api_func(action, params):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise APIError("maxlag", "lag", {})
+        return {"ok": 1}
+
+    def controlled_sleep(_duration):
+        first_at_sleep.set()
+        if not second_may_proceed.wait(timeout=5):
+            raise AssertionError("second api() did not proceed during retry sleep")
+
+    monkeypatch.setattr(wc.time, "sleep", controlled_sleep)
+
+    client = wc.WikiClient(_config(tmp_path))
+    _patch_sites(monkeypatch, client, [FakeSite(api_func=api_func)])
+    client.login()
+
+    def first_call():
+        assert client.api("query") == {"ok": 1}
+
+    def second_call():
+        assert first_at_sleep.wait(timeout=5)
+        assert client.api("query") == {"ok": 1}
+        second_may_proceed.set()
+
+    t1 = threading.Thread(target=first_call)
+    t2 = threading.Thread(target=second_call)
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+    assert not t1.is_alive()
+    assert not t2.is_alive()
+    assert calls["n"] >= 2
 
 
 # --- batch resolution -----------------------------------------------------

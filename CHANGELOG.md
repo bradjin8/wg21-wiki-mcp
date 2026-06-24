@@ -22,6 +22,10 @@ for the pre-1.0 API stability policy and deprecation timeline.
   for future deprecations.
 - `Development Status :: 3 - Alpha` PyPI classifier and README versioning section.
 
+### Fixed
+- `WikiClient.api()`: release the RLock before retry backoff sleep so concurrent
+  tool invocations are not blocked for the full sleep duration.
+
 ### Deprecated
 
 _(none)_
