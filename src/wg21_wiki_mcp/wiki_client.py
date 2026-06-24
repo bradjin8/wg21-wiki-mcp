@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from urllib.parse import quote, urljoin, urlparse
 
@@ -99,6 +101,8 @@ class WikiClient:
                     self._login_with(cred, deadline=deadline)
                     self._active = cred
                     return
+                except FetchError:
+                    raise
                 except Exception as exc:  # noqa: BLE001 - record and try next path
                     path_failures.append(auth_path_failure_label(cred.label, exc))
             raise AuthError(summarize_auth_failures(path_failures))
@@ -127,10 +131,47 @@ class WikiClient:
         else:
             self._user_login(cred, deadline=deadline)
 
+    @staticmethod
+    def _timeout_remaining(deadline: float | None) -> float | None:
+        """Return seconds left until ``deadline``, or raise if it has passed."""
+        if deadline is None:
+            return None
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise FetchError("API call timed out.")
+        return remaining
+
+    def _http_timeout(self, deadline: float | None, *, cap: float = 30.0) -> float:
+        remaining = self._timeout_remaining(deadline)
+        if remaining is None:
+            return cap
+        return min(remaining, cap)
+
+    @contextmanager
+    def _site_request_timeout(self, site: mwclient.Site, deadline: float | None) -> Iterator[None]:
+        saved_request_timeout: object = _UNSET_TIMEOUT
+        request_opts = getattr(site, "requests", None)
+        request_timeout_modified = False
+        if deadline is not None:
+            remaining = self._timeout_remaining(deadline)
+            if isinstance(request_opts, dict):
+                saved_request_timeout = request_opts.get("timeout", _UNSET_TIMEOUT)
+                request_opts["timeout"] = remaining
+                request_timeout_modified = True
+        try:
+            yield
+        finally:
+            if request_timeout_modified and isinstance(request_opts, dict):
+                if saved_request_timeout is _UNSET_TIMEOUT:
+                    request_opts.pop("timeout", None)
+                else:
+                    request_opts["timeout"] = saved_request_timeout
+
     def _bot_login(self, cred: Credentials, *, deadline: float | None = None) -> None:
         self._timeout_remaining(deadline)
         site = self._new_site()
-        site.login(cred.username, cred.password)
+        with self._site_request_timeout(site, deadline):
+            site.login(cred.username, cred.password)
         self._site = site
 
     def _user_login(self, cred: Credentials, *, deadline: float | None = None) -> None:
@@ -142,9 +183,10 @@ class WikiClient:
             return
         # Fall back to the headless SimpleSAMLphp web-SSO flow.
         self._saml_login(site, cred, deadline=deadline)
-        site.site_init()
-        if not self._is_authenticated(site):
-            raise AuthError("SAML login completed but the API still sees an anonymous session.")
+        with self._site_request_timeout(site, deadline):
+            site.site_init()
+            if not self._is_authenticated(site):
+                raise AuthError("SAML login completed but the API still sees an anonymous session.")
         self._site = site
 
     def _try_clientlogin(self, site: mwclient.Site, cred: Credentials, *, deadline: float | None = None) -> bool:
@@ -152,19 +194,20 @@ class WikiClient:
         # Call the API directly: mwclient.clientlogin() calls require(1, 27),
         # which fails on a read-protected wiki before login.
         try:
-            token = site.get_token("login")
-            resp = site.post(
-                "clientlogin",
-                username=cred.username,
-                password=cred.password,
-                logintoken=token,
-                loginreturnurl=f"{self._scheme}://{self._host}",
-            )
+            with self._site_request_timeout(site, deadline):
+                token = site.get_token("login")
+                resp = site.post(
+                    "clientlogin",
+                    username=cred.username,
+                    password=cred.password,
+                    logintoken=token,
+                    loginreturnurl=f"{self._scheme}://{self._host}",
+                )
+                if resp.get("clientlogin", {}).get("status") == "PASS":
+                    site.site_init()
+                    return True
         except (APIError, MwClientError):
             return False
-        if resp.get("clientlogin", {}).get("status") == "PASS":
-            site.site_init()
-            return True
         return False
 
     def _saml_login(self, site: mwclient.Site, cred: Credentials, *, deadline: float | None = None) -> None:
@@ -172,10 +215,7 @@ class WikiClient:
 
         session = site.connection  # reuse mwclient's requests.Session so cookies persist
         start = f"{self._config.base_url}/index.php?title=Special:PluggableAuthLogin"
-        http_timeout = self._timeout_remaining(deadline)
-        if http_timeout is not None:
-            http_timeout = min(http_timeout, 30.0)
-        resp = session.get(start, allow_redirects=True, timeout=http_timeout or 30)
+        resp = session.get(start, allow_redirects=True, timeout=self._http_timeout(deadline))
 
         soup = BeautifulSoup(resp.text, "lxml")
         form = next((f for f in soup.find_all("form") if f.find("input", {"type": "password"})), None)
@@ -195,7 +235,7 @@ class WikiClient:
         fields[user_field] = cred.username
         fields[pass_field] = cred.password
 
-        posted = session.post(action, data=fields, allow_redirects=True, timeout=http_timeout or 30)
+        posted = session.post(action, data=fields, allow_redirects=True, timeout=self._http_timeout(deadline))
         soup2 = BeautifulSoup(posted.text, "lxml")
         saml_form = next((f for f in soup2.find_all("form") if f.find("input", {"name": "SAMLResponse"})), None)
         if saml_form is None:
@@ -204,7 +244,7 @@ class WikiClient:
             return  # the client auto-followed the POST
         acs = urljoin(posted.url, str(saml_form.get("action")))
         payload = {str(i["name"]): str(i.get("value", "")) for i in saml_form.find_all("input") if i.get("name")}
-        session.post(acs, data=payload, allow_redirects=True, timeout=http_timeout or 30)
+        session.post(acs, data=payload, allow_redirects=True, timeout=self._http_timeout(deadline))
 
     @staticmethod
     def _is_authenticated(site: mwclient.Site) -> bool:
@@ -212,16 +252,6 @@ class WikiClient:
         return bool(info.get("name")) and "anon" not in info
 
     # -- API call wrapper ---------------------------------------------------
-    @staticmethod
-    def _timeout_remaining(deadline: float | None) -> float | None:
-        """Return seconds left until ``deadline``, or raise if it has passed."""
-        if deadline is None:
-            return None
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise FetchError("API call timed out.")
-        return remaining
-
     def api(self, action: str, *, timeout: float | None = None, **params: object) -> dict:
         """Call the Action API with retry + automatic re-login on session loss.
 
@@ -239,31 +269,17 @@ class WikiClient:
                 if self._site is None:
                     self.login(deadline=deadline)
                 assert self._site is not None  # login() sets the site or raises
-                saved_request_timeout: object = _UNSET_TIMEOUT
-                request_opts = getattr(self._site, "requests", None)
-                request_timeout_modified = False
-                if deadline is not None:
-                    remaining = self._timeout_remaining(deadline)
-                    if isinstance(request_opts, dict):
-                        saved_request_timeout = request_opts.get("timeout", _UNSET_TIMEOUT)
-                        request_opts["timeout"] = remaining
-                        request_timeout_modified = True
-                try:
-                    return self._site.api(action, **params)
-                except APIError as exc:
-                    last_exc = exc
-                    if exc.code in _AUTH_ERROR_CODES:
-                        relogin = True
-                    elif exc.code not in _BACKOFF_CODES:
-                        raise
-                except (MwClientError, ConnectionError, OSError) as exc:
-                    last_exc = exc
-                finally:
-                    if request_timeout_modified and isinstance(request_opts, dict):
-                        if saved_request_timeout is _UNSET_TIMEOUT:
-                            request_opts.pop("timeout", None)
-                        else:
-                            request_opts["timeout"] = saved_request_timeout
+                with self._site_request_timeout(self._site, deadline):
+                    try:
+                        return self._site.api(action, **params)
+                    except APIError as exc:
+                        last_exc = exc
+                        if exc.code in _AUTH_ERROR_CODES:
+                            relogin = True
+                        elif exc.code not in _BACKOFF_CODES:
+                            raise
+                    except (MwClientError, ConnectionError, OSError) as exc:
+                        last_exc = exc
             sleep_s = min(2**attempt, 30)
             if deadline is not None:
                 remaining = self._timeout_remaining(deadline)

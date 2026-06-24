@@ -305,3 +305,38 @@ def test_api_timeout_skips_relogin_when_budget_exhausted(tmp_path, monkeypatch):
         client.api("query", timeout=0.5)
     assert calls["api"] >= 1
     assert calls["relogin"] == 0
+
+
+def test_login_raises_fetch_error_on_timeout(tmp_path, monkeypatch):
+    from wg21_wiki_mcp.models import FetchError
+
+    client = wc.WikiClient(_config(tmp_path, bot=True))
+    base = time.monotonic()
+    ticks = {"n": 0}
+
+    def fake_monotonic():
+        ticks["n"] += 1
+        return base + 100.0 if ticks["n"] > 1 else base
+
+    monkeypatch.setattr(wc.time, "monotonic", fake_monotonic)
+    with pytest.raises(FetchError, match="timed out"):
+        client.login(deadline=base + 0.5)
+
+
+def test_bot_login_applies_site_request_timeout(tmp_path, monkeypatch):
+    site = FakeSite()
+    seen: list[object] = []
+    real_login = site.login
+
+    def tracked_login(u, p):
+        seen.append(site.requests.get("timeout"))
+        return real_login(u, p)
+
+    site.login = tracked_login  # type: ignore[method-assign]
+    client = wc.WikiClient(_config(tmp_path))
+    monkeypatch.setattr(client, "_new_site", lambda: site)
+    cred = client._config.bot
+    assert cred is not None
+    client._bot_login(cred, deadline=time.monotonic() + 5.0)
+    assert seen and seen[0] is not None
+    assert "timeout" not in site.requests
