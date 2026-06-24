@@ -8,9 +8,12 @@ opaque cursors; ``get_page`` chunks long pages on UTF-8 boundaries.
 
 from __future__ import annotations
 
+import json
 import re
+from datetime import datetime, timezone
 
 from .context import ServerContext
+from .fetch import DEFAULT_COMPOSITE_MAX_WAIT_S
 from .log import get_logger
 from .log_safety import safe_exception_summary
 from .models import (
@@ -42,10 +45,55 @@ _DEFAULT_PAGE_MAX_BYTES = 48 * 1024
 _DEFAULT_BUNDLE_PAGE_MAX_BYTES = 8 * 1024
 _MAX_LIST_LIMIT = 50
 _MAX_NS_PAGE_LIMIT = 500
+_OUTLINKS_KEY_SEP = "\0outlinks="
 
 
 def _clamp(value: int, lo: int, hi: int) -> int:
     return max(lo, min(value, hi))
+
+
+def outlinks_cache_key(title: str) -> str:
+    """Return the cache key for a meeting page's outlink index."""
+    return f"{title}{_OUTLINKS_KEY_SEP}"
+
+
+def _page_outlinks(ctx: ServerContext, title: str, *, cap: int = 500) -> list[str]:
+    """All internal links on a page (paginated up to ``cap``)."""
+    links: list[str] = []
+    cont: str | None = None
+    while len(links) < cap:
+        resp = ctx.client.page_links(title, limit=500, cont=cont)
+        for page in resp.get("query", {}).get("pages", {}).values():
+            for link in page.get("links", []):
+                if link.get("ns", 0) >= 0:
+                    links.append(link["title"])
+        cont = resp.get("continue", {}).get("plcontinue")
+        if not cont:
+            break
+    return links
+
+
+def _cached_page_outlinks(ctx: ServerContext, title: str, *, cap: int = 500) -> list[str]:
+    """Outlink index for ``title``, cached for the current meeting-aware TTL."""
+    ttl_seconds = ctx.current_ttl()
+    key = outlinks_cache_key(title)
+    entry = ctx.cache.get(key)
+    if entry is not None and entry.age_seconds() < ttl_seconds:
+        return json.loads(entry.content)
+
+    links = _page_outlinks(ctx, title, cap=cap)
+    fetched_at = datetime.now(timezone.utc).isoformat()
+    ctx.cache.put(
+        requested_title=key,
+        title=title,
+        redirected_from=None,
+        revid=None,
+        timestamp=None,
+        size=None,
+        content=json.dumps(links),
+        fetched_at=fetched_at,
+    )
+    return links
 
 
 def _lookup_namespace_name(ctx: ServerContext, namespace_id: int) -> str | None:
@@ -287,28 +335,14 @@ def get_recent_changes(
 # --------------------------------------------------------------------------- #
 # get_meeting_overview
 # --------------------------------------------------------------------------- #
-def _page_outlinks(ctx: ServerContext, title: str, *, cap: int = 500) -> list[str]:
-    """All internal links on a page (paginated up to ``cap``)."""
-    links: list[str] = []
-    cont: str | None = None
-    while len(links) < cap:
-        resp = ctx.client.page_links(title, limit=500, cont=cont)
-        for page in resp.get("query", {}).get("pages", {}).values():
-            for link in page.get("links", []):
-                if link.get("ns", 0) >= 0:
-                    links.append(link["title"])
-        cont = resp.get("continue", {}).get("plcontinue")
-        if not cont:
-            break
-    return links
-
-
 def get_meeting_overview(ctx: ServerContext, meeting: str | None = None) -> MeetingOverview:
     """Return a meeting's landing page (verbatim) plus its deterministic outlink index."""
     title = _resolve_meeting(ctx, meeting)
     home = get_page(ctx, title)
     outlinks = [
-        PageRef(title=t, url=ctx.client.canonical_url(t)) for t in _page_outlinks(ctx, title) if t.startswith(title)
+        PageRef(title=t, url=ctx.client.canonical_url(t))
+        for t in _cached_page_outlinks(ctx, title)
+        if t.startswith(title)
     ]
     return MeetingOverview(meeting=title, home=home, outlinks=outlinks)
 
@@ -334,8 +368,16 @@ def get_meeting_sessions(
     max_page_bytes = _clamp(max_page_bytes, 512, 64 * 1024)
     group_tokens = [g.lower() for g in (groups or [])]
 
-    candidates = [t for t in _page_outlinks(ctx, title) if t.startswith(title)]
-    fetched = ctx.fetcher.get_pages(candidates, ttl_seconds=ctx.current_ttl()) if candidates else {}
+    candidates = [t for t in _cached_page_outlinks(ctx, title) if t.startswith(title)]
+    fetched = (
+        ctx.fetcher.get_pages(
+            candidates,
+            ttl_seconds=ctx.current_ttl(),
+            max_wait_s=DEFAULT_COMPOSITE_MAX_WAIT_S,
+        )
+        if candidates
+        else {}
+    )
 
     iso_slots: list[IsoSlot] = []
     iso_status = "not_found"

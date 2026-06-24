@@ -15,6 +15,7 @@ re-login, and load control. Cache-missing fetches are:
 from __future__ import annotations
 
 import threading
+import time
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -24,11 +25,14 @@ from filelock import FileLock, Timeout
 from .cache import Cache, CacheEntry, title_hash
 from .log import get_logger
 from .log_safety import safe_exception_summary
+from .models import FetchError
 from .wiki_client import FetchedPage, WikiClient
 
 logger = get_logger("fetch")
 
 _LOCK_TIMEOUT_S = 60
+# Composite tools (e.g. get_meeting_sessions) cap total wait for lock + network.
+DEFAULT_COMPOSITE_MAX_WAIT_S = 30.0
 # Idle in-process lock slots are evicted once the map exceeds this size.
 _MAX_INPROC_LOCK_ENTRIES = 256
 _SECTION_KEY_SEP = "\0section="
@@ -128,8 +132,16 @@ class PageFetcher:
             )
             return _section_outcome(_from_entry(entry, from_cache=False), title)
 
-    def get_pages(self, titles: list[str], *, ttl_seconds: int, refresh: bool = False) -> dict[str, FetchOutcome]:
+    def get_pages(
+        self,
+        titles: list[str],
+        *,
+        ttl_seconds: int,
+        refresh: bool = False,
+        max_wait_s: float | None = None,
+    ) -> dict[str, FetchOutcome]:
         """Resolve many titles at once, cache-first then batched network fetch."""
+        deadline = time.monotonic() + max_wait_s if max_wait_s is not None else None
         now = datetime.now(timezone.utc)
         outcomes: dict[str, FetchOutcome] = {}
         need_network: list[str] = []
@@ -145,8 +157,17 @@ class PageFetcher:
                     stale[title] = entry
 
         if need_network:
-            self._resolve_network(need_network, stale, ttl_seconds, refresh, outcomes)
+            self._resolve_network(need_network, stale, ttl_seconds, refresh, outcomes, deadline)
         return outcomes
+
+    @staticmethod
+    def _timeout_remaining(deadline: float | None) -> float | None:
+        if deadline is None:
+            return None
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise FetchError("Page fetch timed out waiting for the wiki.")
+        return remaining
 
     def _resolve_network(
         self,
@@ -155,10 +176,14 @@ class PageFetcher:
         ttl_seconds: int,
         refresh: bool,
         outcomes: dict[str, FetchOutcome],
+        deadline: float | None = None,
     ) -> None:
+        self._timeout_remaining(deadline)
         with ExitStack() as stack:
             self._acquire_inproc(stack, sorted(titles))
             self._acquire_cross_process(stack, sorted(titles))
+
+            self._timeout_remaining(deadline)
 
             # Re-check the cache: another process may have filled it while we waited.
             still: list[str] = []
@@ -170,8 +195,8 @@ class PageFetcher:
                         continue
                 still.append(title)
 
-            to_fetch = self._revalidate(still, stale, refresh, outcomes)
-            self._fetch_and_store(sorted(to_fetch), outcomes)
+            to_fetch = self._revalidate(still, stale, refresh, outcomes, deadline)
+            self._fetch_and_store(sorted(to_fetch), outcomes, deadline)
 
     def _revalidate(
         self,
@@ -179,13 +204,14 @@ class PageFetcher:
         stale: dict[str, CacheEntry],
         refresh: bool,
         outcomes: dict[str, FetchOutcome],
+        deadline: float | None = None,
     ) -> set[str]:
         """Cheap revid check: unchanged stale entries are touched and served."""
         to_fetch = set(titles)
         candidates = [t for t in titles if not refresh and t in stale and stale[t].revid is not None]
         if not candidates:
             return to_fetch
-        current = self._client.page_revisions(candidates)
+        current = self._client.page_revisions(candidates, timeout=self._timeout_remaining(deadline))
         for title in candidates:
             entry = stale[title]
             if current.get(title) is not None and current[title] == entry.revid:
@@ -195,11 +221,16 @@ class PageFetcher:
                 to_fetch.discard(title)
         return to_fetch
 
-    def _fetch_and_store(self, titles: list[str], outcomes: dict[str, FetchOutcome]) -> None:
+    def _fetch_and_store(
+        self,
+        titles: list[str],
+        outcomes: dict[str, FetchOutcome],
+        deadline: float | None = None,
+    ) -> None:
         if not titles:
             return
         fetched_at = datetime.now(timezone.utc).isoformat()
-        fetched = self._client.fetch_pages(titles)  # batched (<=50 per request)
+        fetched = self._client.fetch_pages(titles, timeout=self._timeout_remaining(deadline))
         for title in titles:
             page = fetched.get(title)
             if page is None or page.missing or page.content is None:

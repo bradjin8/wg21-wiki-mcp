@@ -83,6 +83,27 @@ re-checked hourly during the three-times-a-year meetings, detected from the
 public meetings calendar (with a conservative bias to the short TTL on any parse
 failure).
 
+### Meeting-time performance
+
+During a meeting window the cache TTL is one hour (vs one week normally), so
+cache misses are more frequent and composite tools do more upstream work. The
+server mitigates stall amplification as follows:
+
+| Path | Normal TTL | Meeting TTL | Notes |
+|------|------------|-------------|-------|
+| Single-page tools (`get_page`, etc.) | cache hit: ~ms | cache hit: ~ms | Miss: one batched API call per title (≤50 titles/request). |
+| `get_meeting_overview` | outlink index cached with TTL | same | First call enumerates links; repeats within TTL skip `prop=links`. |
+| `get_meeting_sessions` | outlink index cached + page bundle | same | Outlink discovery is cached separately from page bodies; page fetch capped at **30s** total wait (`DEFAULT_COMPOSITE_MAX_WAIT_S`). |
+| `WikiClient.api()` | retries with lock released during backoff | same | Optional per-call `timeout=` bounds all retries; raises `FetchError` when exceeded. |
+
+**Expected latency (order of magnitude, cache-cold, typical meeting with ~40 subpages):**
+
+- First `get_meeting_sessions` in an hour: 1–5 outlink API calls + 1 batched page fetch (often 2–8s on a healthy wiki; longer if the wiki is lagging).
+- Repeat within the same TTL window: 0 outlink calls + cache hits for unchanged pages (sub-second locally).
+- Concurrent tool calls during retry backoff: other callers proceed because the client lock is released before sleep.
+
+Under sustained lag (`maxlag` / slow responses), per-call timeouts surface as `FETCH_ERROR` rather than blocking all tools indefinitely.
+
 ## What may break
 
 - **SSO form drift.** Headless user login parses the SimpleSAMLphp login form;

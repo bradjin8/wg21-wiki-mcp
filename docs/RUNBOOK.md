@@ -145,6 +145,32 @@ change returned wikitext.
   `YYYY-MM-DD/YYYY-MM-DD` pairs) when autodetection is wrong.
 - Tune `ISOCPP_WIKI_TTL_NORMAL` / `ISOCPP_WIKI_TTL_MEETING` if needed.
 
+### Meeting-time load (`get_meeting_sessions`)
+
+**Symptoms:** Slow first call at the start of a meeting hour; `FETCH_ERROR` after
+~30s under wiki lag; multiple agents calling `get_meeting_sessions` at once.
+
+**Behavior:**
+
+- Outlink discovery (which subpages exist) is cached with the same meeting-aware
+  TTL as page bodies. Repeated calls within that window skip re-enumerating links.
+- The page bundle fetch is bounded to **30 seconds** total wait; if locks or
+  upstream API calls exceed that, the tool raises `FETCH_ERROR` (code 3) instead
+  of blocking other tools indefinitely.
+- `WikiClient.api()` accepts an optional per-call timeout and releases the client
+  lock before retry backoff sleep so one slow response does not stall all nine tools.
+
+**Expected latency:** See the "Meeting-time performance" table in
+[ARCHITECTURE.md](../ARCHITECTURE.md). Cache-warm repeats are typically sub-second;
+cache-cold first calls for a ~40-page meeting are often a few seconds on a healthy wiki.
+
+**Fixes:**
+
+- Retry after a `FETCH_ERROR` once wiki lag clears (`wiki_status` / upstream health).
+- Warm the cache with one `get_meeting_sessions` call before parallel agent use.
+- Ensure multiple MCP processes share one cache directory (default) so outlink
+  indexes and page bodies are reused.
+
 ### Malformed pagination cursor (`INVALID_PARAMS`, code `-32602`)
 
 **Symptoms:** `next_cursor` from a prior response no longer works.

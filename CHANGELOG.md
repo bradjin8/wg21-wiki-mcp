@@ -21,6 +21,10 @@ for the pre-1.0 API stability policy and deprecation timeline.
 - `wg21_wiki_mcp.deprecation.warn_deprecated()`: `DeprecationWarning` helper
   for future deprecations.
 - `Development Status :: 3 - Alpha` PyPI classifier and README versioning section.
+- Meeting-time stall mitigation: cached outlink discovery for composite meeting
+  tools, `PageFetcher.get_pages(max_wait_s=…)` (default 30s for
+  `get_meeting_sessions`), and optional per-call `WikiClient.api(timeout=…)`.
+  Documented in ARCHITECTURE.md and docs/RUNBOOK.md.
 
 ### Fixed
 - `WikiClient.api()`: release the RLock before retry backoff sleep so concurrent

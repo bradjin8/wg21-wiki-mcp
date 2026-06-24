@@ -9,6 +9,7 @@ from conftest import FakePage, FakeWikiClient
 
 from wg21_wiki_mcp.cache import Cache
 from wg21_wiki_mcp.fetch import PageFetcher
+from wg21_wiki_mcp.models import FetchError
 
 
 @pytest.fixture
@@ -145,3 +146,20 @@ def test_inproc_lock_map_bounded(tmp_path, monkeypatch):
         assert len(fetcher._inproc_locks) <= 2
     finally:
         cache.close()
+
+
+def test_get_pages_max_wait_raises_when_deadline_exceeded(fetcher_stack, monkeypatch):
+    fetcher, client, _ = fetcher_stack
+    client.pages["P"] = FakePage("body", 1)
+    real_remaining = PageFetcher._timeout_remaining
+    calls = {"n": 0}
+
+    def fake_remaining(deadline):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise FetchError("Page fetch timed out waiting for the wiki.")
+        return real_remaining(deadline)
+
+    monkeypatch.setattr(PageFetcher, "_timeout_remaining", staticmethod(fake_remaining))
+    with pytest.raises(FetchError, match="timed out"):
+        fetcher.get_pages(["P"], ttl_seconds=1000, max_wait_s=30.0)

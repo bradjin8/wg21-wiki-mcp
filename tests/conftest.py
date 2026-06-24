@@ -43,6 +43,7 @@ class FakeWikiClient:
         self.links: dict[str, list[dict]] = {}
         self.allpages: list[dict] = []
         self.fetch_calls = 0
+        self.page_links_calls = 0
         self.fetch_title_batches: list[list[str]] = []
         self.section_fetch_calls = 0
         self.revision_calls = 0
@@ -85,7 +86,7 @@ class FakeWikiClient:
             current = self.redirects[current]
         return current, redirected_from
 
-    def fetch_pages(self, titles: list[str]) -> dict[str, FetchedPage]:
+    def fetch_pages(self, titles: list[str], *, timeout: float | None = None) -> dict[str, FetchedPage]:
         self.fetch_calls += 1
         self.fetch_title_batches.append(list(titles))
         out: dict[str, FetchedPage] = {}
@@ -125,7 +126,7 @@ class FakeWikiClient:
             missing=False,
         )
 
-    def page_revisions(self, titles: list[str]) -> dict[str, int | None]:
+    def page_revisions(self, titles: list[str], *, timeout: float | None = None) -> dict[str, int | None]:
         self.revision_calls += 1
         out: dict[str, int | None] = {}
         for req in titles:
@@ -162,6 +163,7 @@ class FakeWikiClient:
         return resp
 
     def page_links(self, title: str, *, limit: int, cont: str | None) -> dict:
+        self.page_links_calls += 1
         return {"query": {"pages": {"1": {"links": self.links.get(title, [])}}}}
 
     def statistics(self) -> dict:  # pragma: no cover - unused by tests

@@ -292,6 +292,30 @@ def test_session_bundle_no_agenda_signal(fake_client, make_ctx):
     assert bundle.iso_slots == []
 
 
+def test_session_bundle_outlinks_cached_within_ttl(fake_client, make_ctx):
+    """Repeated get_meeting_sessions calls reuse cached outlink discovery."""
+    fake_client.pages["2026-06 Alpha"] = FakePage("home", 1)
+    fake_client.pages["2026-06 Alpha:Agenda"] = FakePage("plain", 2)
+    fake_client.allpages = [{"title": "2026-06 Alpha", "ns": 0}]
+    fake_client.links["2026-06 Alpha"] = [{"title": "2026-06 Alpha:Agenda", "ns": 0}]
+    ctx = make_ctx(fake_client, calendar=FakeCalendar(active=True, mode="meeting"))
+    tools.get_meeting_sessions(ctx)
+    assert fake_client.page_links_calls == 1
+    tools.get_meeting_sessions(ctx)
+    assert fake_client.page_links_calls == 1
+
+
+def test_meeting_overview_outlinks_cached(fake_client, make_ctx):
+    fake_client.pages["2026-06 Alpha"] = FakePage("home body", 1)
+    fake_client.allpages = [{"title": "2026-06 Alpha", "ns": 0}]
+    fake_client.links["2026-06 Alpha"] = [{"title": "2026-06 Alpha:Agenda", "ns": 0}]
+    ctx = make_ctx(fake_client)
+    tools.get_meeting_overview(ctx)
+    assert fake_client.page_links_calls == 1
+    tools.get_meeting_overview(ctx)
+    assert fake_client.page_links_calls == 1
+
+
 # --- wiki_status ----------------------------------------------------------
 def test_wiki_status(fake_client, make_ctx):
     ctx = make_ctx(fake_client, calendar=FakeCalendar(active=True, mode="meeting"))

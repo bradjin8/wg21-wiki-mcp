@@ -201,10 +201,27 @@ class WikiClient:
         return bool(info.get("name")) and "anon" not in info
 
     # -- API call wrapper ---------------------------------------------------
-    def api(self, action: str, **params: object) -> dict:
-        """Call the Action API with retry + automatic re-login on session loss."""
+    @staticmethod
+    def _timeout_remaining(deadline: float | None) -> float | None:
+        """Return seconds left until ``deadline``, or raise if it has passed."""
+        if deadline is None:
+            return None
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise FetchError("API call timed out.")
+        return remaining
+
+    def api(self, action: str, *, timeout: float | None = None, **params: object) -> dict:
+        """Call the Action API with retry + automatic re-login on session loss.
+
+        Args:
+            timeout: Optional wall-clock limit in seconds for this call (all
+                retries and backoff sleeps included).
+        """
+        deadline = time.monotonic() + timeout if timeout is not None else None
         last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES):
+            self._timeout_remaining(deadline)
             relogin = False
             with self._lock:
                 self._require_open()
@@ -221,7 +238,12 @@ class WikiClient:
                         raise
                 except (MwClientError, ConnectionError, OSError) as exc:
                     last_exc = exc
-            time.sleep(min(2**attempt, 30))
+            sleep_s = min(2**attempt, 30)
+            if deadline is not None:
+                remaining = self._timeout_remaining(deadline)
+                assert remaining is not None
+                sleep_s = min(sleep_s, remaining)
+            time.sleep(sleep_s)
             if relogin:
                 with self._lock:
                     self._require_open()
@@ -243,17 +265,19 @@ class WikiClient:
         return f"{base}&oldid={revid}"
 
     # -- read methods -------------------------------------------------------
-    def fetch_pages(self, titles: list[str]) -> dict[str, FetchedPage]:
+    def fetch_pages(self, titles: list[str], *, timeout: float | None = None) -> dict[str, FetchedPage]:
         """Batch-fetch verbatim wikitext + metadata for many titles at once.
 
         Returns a map keyed by the originally requested title. Handles MediaWiki
         title normalization and redirects so content is attributed correctly.
         """
+        deadline = time.monotonic() + timeout if timeout is not None else None
         results: dict[str, FetchedPage] = {}
         for start in range(0, len(titles), _MAX_TITLES_PER_BATCH):
             batch = titles[start : start + _MAX_TITLES_PER_BATCH]
             resp = self.api(
                 "query",
+                timeout=self._timeout_remaining(deadline),
                 titles="|".join(batch),
                 prop="revisions",
                 rvprop="ids|timestamp|size|content",
@@ -306,10 +330,11 @@ class WikiClient:
             )
         return out
 
-    def fetch_page_section(self, title: str, section: int) -> FetchedPage:
+    def fetch_page_section(self, title: str, section: int, *, timeout: float | None = None) -> FetchedPage:
         """Fetch one section's verbatim wikitext (server-side ``rvsection`` split)."""
         resp = self.api(
             "query",
+            timeout=timeout,
             titles=title,
             prop="revisions",
             rvprop="ids|timestamp|size|content",
@@ -320,12 +345,20 @@ class WikiClient:
         mapped = self._map_batch([title], resp.get("query", {}))
         return mapped.get(title) or FetchedPage(title, title, None, None, None, None, None, True)
 
-    def page_revisions(self, titles: list[str]) -> dict[str, int | None]:
+    def page_revisions(self, titles: list[str], *, timeout: float | None = None) -> dict[str, int | None]:
         """Cheaply fetch current revids (for cache revalidation)."""
+        deadline = time.monotonic() + timeout if timeout is not None else None
         out: dict[str, int | None] = {}
         for start in range(0, len(titles), _MAX_TITLES_PER_BATCH):
             batch = titles[start : start + _MAX_TITLES_PER_BATCH]
-            resp = self.api("query", titles="|".join(batch), prop="revisions", rvprop="ids", redirects=1)
+            resp = self.api(
+                "query",
+                timeout=self._timeout_remaining(deadline),
+                titles="|".join(batch),
+                prop="revisions",
+                rvprop="ids",
+                redirects=1,
+            )
             mapped = self._map_batch(batch, resp.get("query", {}))
             out.update({title: page.revid for title, page in mapped.items()})
         return out
@@ -341,7 +374,7 @@ class WikiClient:
         }
         if namespace is not None:
             params["srnamespace"] = namespace
-        return self.api("query", **params)
+        return self.api("query", timeout=None, **params)
 
     def list_pages(self, *, namespace: int, prefix: str | None, limit: int, cont: str | None) -> dict:
         """Enumerate pages in a namespace via ``allpages``; returns the raw response."""
@@ -354,7 +387,7 @@ class WikiClient:
             params["apprefix"] = prefix
         if cont:
             params["apcontinue"] = cont
-        return self.api("query", **params)
+        return self.api("query", timeout=None, **params)
 
     def list_namespaces(self) -> dict:
         """Return the wiki's namespace table (``siteinfo``) as the raw response."""
@@ -374,14 +407,14 @@ class WikiClient:
             params["rcend"] = since
         if cont:
             params["rccontinue"] = cont
-        return self.api("query", **params)
+        return self.api("query", timeout=None, **params)
 
     def page_links(self, title: str, *, limit: int, cont: str | None) -> dict:
         """Fetch the internal links on a page via ``prop=links``; returns the raw response."""
         params: dict[str, object] = {"titles": title, "prop": "links", "pllimit": limit}
         if cont:
             params["plcontinue"] = cont
-        return self.api("query", **params)
+        return self.api("query", timeout=None, **params)
 
     def statistics(self) -> dict:
         """Return the wiki's ``siteinfo`` statistics as the raw response."""

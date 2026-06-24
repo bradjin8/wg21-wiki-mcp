@@ -217,3 +217,18 @@ def test_page_revisions(tmp_path, monkeypatch):
     _patch_sites(monkeypatch, client, [FakeSite(api_func=api_func)])
     client.login()
     assert client.page_revisions(["P"]) == {"P": 99}
+
+
+def test_api_timeout_raises_fetch_error(tmp_path, monkeypatch):
+    """Per-call timeout bounds all retries and raises FetchError."""
+    from wg21_wiki_mcp.models import FetchError
+
+    def api_func(action, params):
+        raise APIError("maxlag", "lag", {})
+
+    monkeypatch.setattr(wc.time, "sleep", lambda *_a, **_k: None)
+    client = wc.WikiClient(_config(tmp_path))
+    _patch_sites(monkeypatch, client, [FakeSite(api_func=api_func)])
+    client.login()
+    with pytest.raises(FetchError, match="timed out"):
+        client.api("query", timeout=0)
