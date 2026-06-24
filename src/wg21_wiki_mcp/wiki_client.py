@@ -419,12 +419,12 @@ class WikiClient:
             params["rccontinue"] = cont
         return self.api("query", timeout=None, **params)
 
-    def page_links(self, title: str, *, limit: int, cont: str | None) -> dict:
+    def page_links(self, title: str, *, limit: int, cont: str | None, timeout: float | None = None) -> dict:
         """Fetch the internal links on a page via ``prop=links``; returns the raw response."""
         params: dict[str, object] = {"titles": title, "prop": "links", "pllimit": limit}
         if cont:
             params["plcontinue"] = cont
-        return self.api("query", timeout=None, **params)
+        return self.api("query", timeout=timeout, **params)
 
     def statistics(self) -> dict:
         """Return the wiki's ``siteinfo`` statistics as the raw response."""

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 from conftest import FakeCalendar, FakePage
 
 from wg21_wiki_mcp import tools
-from wg21_wiki_mcp.models import PageNotFound
+from wg21_wiki_mcp.models import FetchError, PageNotFound
 
 
 # --- search ---------------------------------------------------------------
@@ -314,6 +316,128 @@ def test_meeting_overview_outlinks_cached(fake_client, make_ctx):
     assert fake_client.page_links_calls == 1
     tools.get_meeting_overview(ctx)
     assert fake_client.page_links_calls == 1
+
+
+def test_cached_outlinks_stale_fallback_on_timeout(fake_client, make_ctx, monkeypatch):
+    """When the composite budget is exhausted, return stale outlinks instead of blocking."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    ctx = make_ctx(fake_client)
+    key = tools.outlinks_cache_key("2026-06 Alpha")
+    stale = ["2026-06 Alpha:Cached"]
+    old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    ctx.cache.put(
+        requested_title=key,
+        title="2026-06 Alpha",
+        redirected_from=None,
+        revid=None,
+        timestamp=None,
+        size=None,
+        content=json.dumps(stale),
+        fetched_at=old,
+    )
+    fake_client.allpages = [{"title": "2026-06 Alpha", "ns": 0}]
+
+    base = time.monotonic()
+
+    def fake_monotonic():
+        return base + 100.0
+
+    monkeypatch.setattr(tools.time, "monotonic", fake_monotonic)
+    links = tools._cached_page_outlinks(ctx, "2026-06 Alpha", deadline=base + 0.5)
+    assert links == stale
+    assert fake_client.page_links_calls == 0
+
+
+def test_outlinks_lock_map_bounded(fake_client, make_ctx, monkeypatch):
+    monkeypatch.setattr(tools, "_MAX_OUTLINKS_LOCK_ENTRIES", 2)
+    ctx = make_ctx(fake_client)
+    for i in range(4):
+        fake_client.links[f"2026-06 Meeting {i}"] = []
+        fake_client.allpages = [{"title": f"2026-06 Meeting {i}", "ns": 0}]
+        tools._cached_page_outlinks(ctx, f"2026-06 Meeting {i}")
+    assert len(tools._outlinks_locks) <= 2
+
+
+def test_cached_outlinks_raises_without_stale_on_timeout(fake_client, make_ctx, monkeypatch):
+    ctx = make_ctx(fake_client)
+    base = time.monotonic()
+    monkeypatch.setattr(tools.time, "monotonic", lambda: base + 100.0)
+    with pytest.raises(FetchError, match="timed out"):
+        tools._cached_page_outlinks(ctx, "2026-06 Alpha", deadline=base + 0.5)
+
+
+def test_cached_outlinks_stale_on_discovery_failure(fake_client, make_ctx, monkeypatch):
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    ctx = make_ctx(fake_client)
+    key = tools.outlinks_cache_key("2026-06 Alpha")
+    stale = ["2026-06 Alpha:Cached"]
+    old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    ctx.cache.put(
+        requested_title=key,
+        title="2026-06 Alpha",
+        redirected_from=None,
+        revid=None,
+        timestamp=None,
+        size=None,
+        content=json.dumps(stale),
+        fetched_at=old,
+    )
+
+    def fail_outlinks(*_a, **_k):
+        raise FetchError("API call timed out.")
+
+    monkeypatch.setattr(tools, "_page_outlinks", fail_outlinks)
+    assert tools._cached_page_outlinks(ctx, "2026-06 Alpha", deadline=time.monotonic() + 30) == stale
+
+
+def test_cached_outlinks_raises_on_discovery_failure_without_stale(fake_client, make_ctx, monkeypatch):
+    ctx = make_ctx(fake_client)
+
+    def fail_outlinks(*_a, **_k):
+        raise FetchError("API call timed out.")
+
+    monkeypatch.setattr(tools, "_page_outlinks", fail_outlinks)
+    with pytest.raises(FetchError, match="timed out"):
+        tools._cached_page_outlinks(ctx, "2026-06 Alpha", deadline=time.monotonic() + 30)
+
+
+def test_cached_outlinks_stale_on_lock_contention(fake_client, make_ctx):
+    """When the outlink lock cannot be taken in time, serve stale cache if present."""
+    import json
+    import threading
+    from datetime import datetime, timedelta, timezone
+
+    ctx = make_ctx(fake_client)
+    key = tools.outlinks_cache_key("2026-06 Alpha")
+    stale = ["2026-06 Alpha:Cached"]
+    old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    ctx.cache.put(
+        requested_title=key,
+        title="2026-06 Alpha",
+        redirected_from=None,
+        revid=None,
+        timestamp=None,
+        size=None,
+        content=json.dumps(stale),
+        fetched_at=old,
+    )
+
+    held = tools._acquire_outlinks_lock(key, deadline=None)
+    results: list[list[str]] = []
+
+    def worker() -> None:
+        results.append(tools._cached_page_outlinks(ctx, "2026-06 Alpha", deadline=time.monotonic() + 0.05))
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join(timeout=2)
+    tools._release_outlinks_lock(key, held)
+    thread.join(timeout=2)
+    assert results == [stale]
 
 
 # --- wiki_status ----------------------------------------------------------

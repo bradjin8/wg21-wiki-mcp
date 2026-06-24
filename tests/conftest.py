@@ -162,7 +162,7 @@ class FakeWikiClient:
             resp["continue"] = {"rccontinue": str(start + limit)}
         return resp
 
-    def page_links(self, title: str, *, limit: int, cont: str | None) -> dict:
+    def page_links(self, title: str, *, limit: int, cont: str | None, timeout: float | None = None) -> dict:
         self.page_links_calls += 1
         return {"query": {"pages": {"1": {"links": self.links.get(title, [])}}}}
 
