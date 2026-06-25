@@ -178,24 +178,25 @@ class PageFetcher:
         deadline: float | None = None,
     ) -> None:
         timeout_remaining(deadline)
-        with ExitStack() as stack:
-            self._acquire_inproc(stack, sorted(titles), deadline)
-            self._acquire_cross_process(stack, sorted(titles), deadline)
 
-            timeout_remaining(deadline)
+        # Re-check the cache without locks: another process may have filled it.
+        still: list[str] = []
+        for title in titles:
+            if not refresh:
+                entry = self._cache.get(title)
+                if entry is not None and entry.age_seconds() < ttl_seconds:
+                    outcomes[title] = _from_entry(entry, from_cache=True)
+                    continue
+            still.append(title)
 
-            # Re-check the cache: another process may have filled it while we waited.
-            still: list[str] = []
-            for title in titles:
-                if not refresh:
-                    entry = self._cache.get(title)
-                    if entry is not None and entry.age_seconds() < ttl_seconds:
-                        outcomes[title] = _from_entry(entry, from_cache=True)
-                        continue
-                still.append(title)
-
-            to_fetch = self._revalidate(still, stale, refresh, outcomes, deadline)
-            self._fetch_and_store(sorted(to_fetch), outcomes, deadline)
+        to_fetch = self._revalidate(still, stale, refresh, outcomes, deadline)
+        self._fetch_and_store(
+            sorted(to_fetch),
+            outcomes,
+            deadline,
+            ttl_seconds=ttl_seconds,
+            refresh=refresh,
+        )
 
     def _revalidate(
         self,
@@ -225,27 +226,66 @@ class PageFetcher:
         titles: list[str],
         outcomes: dict[str, FetchOutcome],
         deadline: float | None = None,
+        *,
+        ttl_seconds: int,
+        refresh: bool,
     ) -> None:
+        """Fetch and store pages; file locks are held per-title during cache write only."""
         if not titles:
             return
-        fetched_at = datetime.now(timezone.utc).isoformat()
-        fetched = self._client.fetch_pages(titles, timeout=timeout_remaining(deadline))
-        for title in titles:
-            page = fetched.get(title)
-            if page is None or page.missing or page.content is None:
-                outcomes[title] = _missing(title, page, fetched_at)
-                continue
-            entry = self._cache.put(
-                requested_title=title,
-                title=page.title,
-                redirected_from=page.redirected_from,
-                revid=page.revid,
-                timestamp=page.timestamp,
-                size=page.size,
-                content=page.content,
-                fetched_at=fetched_at,
-            )
-            outcomes[title] = _from_entry(entry, from_cache=False)
+
+        leaders: list[str] = []
+        inproc_stacks: list[ExitStack] = []
+        try:
+            for title in titles:
+                timeout_remaining(deadline)
+                stack = ExitStack()
+                self._acquire_inproc(stack, [title], deadline)
+                if not refresh:
+                    entry = self._cache.get(title)
+                    if entry is not None and entry.age_seconds() < ttl_seconds:
+                        outcomes[title] = _from_entry(entry, from_cache=True)
+                        stack.close()
+                        continue
+                leaders.append(title)
+                inproc_stacks.append(stack)
+
+            if not leaders:
+                return
+
+            fetched_at = datetime.now(timezone.utc).isoformat()
+            fetched = self._client.fetch_pages(leaders, timeout=timeout_remaining(deadline))
+
+            for title, inproc_stack in zip(leaders, inproc_stacks, strict=True):
+                try:
+                    with ExitStack() as file_stack:
+                        self._acquire_cross_process(file_stack, [title], deadline)
+                        if not refresh:
+                            entry = self._cache.get(title)
+                            if entry is not None and entry.age_seconds() < ttl_seconds:
+                                outcomes[title] = _from_entry(entry, from_cache=True)
+                                continue
+                        page = fetched.get(title)
+                        if page is None or page.missing or page.content is None:
+                            outcomes[title] = _missing(title, page, fetched_at)
+                            continue
+                        entry = self._cache.put(
+                            requested_title=title,
+                            title=page.title,
+                            redirected_from=page.redirected_from,
+                            revid=page.revid,
+                            timestamp=page.timestamp,
+                            size=page.size,
+                            content=page.content,
+                            fetched_at=fetched_at,
+                        )
+                        outcomes[title] = _from_entry(entry, from_cache=False)
+                finally:
+                    inproc_stack.close()
+        except BaseException:
+            for stack in inproc_stacks:
+                stack.close()
+            raise
 
     # -- locking helpers ----------------------------------------------------
     def _acquire_inproc(self, stack: ExitStack, titles: list[str], deadline: float | None) -> None:

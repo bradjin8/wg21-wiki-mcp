@@ -31,6 +31,10 @@ for the pre-1.0 API stability policy and deprecation timeline.
 ### Fixed
 - `WikiClient.api()`: release the RLock before retry backoff sleep so concurrent
   tool invocations are not blocked for the full sleep duration.
+- `PageFetcher._resolve_network`: revalidation and batched network fetch no longer
+  hold cross-process file locks for every title at once; file locks are acquired
+  per-title only during cache write, reducing lock convoys in composite tools like
+  `get_meeting_sessions`.
 
 ### Deprecated
 
