@@ -59,17 +59,26 @@ jobs:
           python -m build
       - name: Generate CycloneDX SBOM
         run: |
+          set -euo pipefail
           python -m pip install cyclonedx-bom
-          pip install -r requirements-lock.txt
-          pip install --no-deps .
-          cyclonedx-py environment --output-format json --output-file sbom.cdx.json
+          python -m venv .sbom-venv
+          .sbom-venv/bin/pip install -r requirements-lock.txt
+          .sbom-venv/bin/pip install --no-deps dist/*.whl
+          cyclonedx-py environment .sbom-venv/bin/python \
+            --output-format json \
+            --output-file sbom.cdx.json
+      - name: Stage artifacts for Sigstore signing
+        run: |
+          set -euo pipefail
+          mkdir -p signing
+          cp dist/*.tar.gz dist/*.whl sbom.cdx.json signing/
       - name: Sign distributions and SBOM (Sigstore)
         uses: sigstore/gh-action-sigstore-python@5b79a39c381910c090341a2c9b0bf022c8b387e1 # v3.4.0
         with:
           inputs: |
-            ./dist/*.tar.gz
-            ./dist/*.whl
-            ./sbom.cdx.json
+            ./signing/*.tar.gz
+            ./signing/*.whl
+            ./signing/sbom.cdx.json
           release-signing-artifacts: false
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
@@ -78,14 +87,14 @@ jobs:
       - name: Attach SBOM and signed artifacts to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          TAG="${{ github.ref_name }}"
           if ! gh release view "${TAG}" >/dev/null 2>&1; then
             gh release create "${TAG}" --title "${TAG}" --generate-notes
           fi
           shopt -s nullglob
-          SIGSTORE_BUNDLES=(dist/*.sigstore.json sbom.cdx.json.sigstore.json)
+          SIGSTORE_BUNDLES=(signing/*.sigstore.json)
           shopt -u nullglob
           gh release upload "${TAG}" \
             dist/*.tar.gz \
