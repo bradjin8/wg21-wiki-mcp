@@ -187,8 +187,11 @@ pip-compile pyproject.toml --output-file=requirements-lock.txt --strip-extras
      The tag must match the bumped `version` / `__version__`; [publish.yml](.github/workflows/publish.yml)
      fails the build otherwise.
   5. The [publish workflow](.github/workflows/publish.yml) uploads the sdist and
-     wheel to PyPI via Trusted Publisher (OIDC). Configure the `pypi` GitHub
-     environment and the matching trusted publisher on
+     wheel to PyPI via Trusted Publisher (OIDC), generates a CycloneDX SBOM,
+     signs the distributions and SBOM with Sigstore, and creates the GitHub
+     Release (if missing) with those artifacts attached. Configure the `pypi`
+     GitHub environment and the matching trusted publisher on
      [pypi.org/project/wg21-wiki-mcp](https://pypi.org/project/wg21-wiki-mcp/)
      before the first tag push.
-  6. Create the GitHub Release from that tag.
+  6. Review the auto-created GitHub Release notes and Sigstore bundles on the
+     release assets tab; edit the release description if needed.

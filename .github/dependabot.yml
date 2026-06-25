@@ -16,9 +16,15 @@ updates:
         patterns:
           - "*"
 
+  # Keeps SHA-pinned actions in .github/workflows/*.yml current (trailing # vX.Y.Z
+  # comments let Dependabot resolve the next tag and refresh the digest).
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    groups:
+      pin-actions:
+        patterns:
+          - "*"
