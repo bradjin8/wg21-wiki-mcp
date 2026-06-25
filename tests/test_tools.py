@@ -455,17 +455,21 @@ def test_page_outlinks_client_unlocked_between_pagination(fake_client, make_ctx)
     """Each pagination iteration completes before the next page_links call starts."""
     import threading
 
-    links = [{"title": f"2026-06 Alpha:Link{i}", "ns": 0} for i in range(600)]
-    fake_client.links["2026-06 Alpha"] = links
+    target = "2026-06 Alpha"
+    links = [{"title": f"{target}:Link{i}", "ns": 0} for i in range(600)]
+    fake_client.links[target] = links
+    expected = [f"{target}:Link{i}" for i in range(600)]
     client_lock = threading.RLock()
     first_batch_done = threading.Event()
     concurrent_ok = threading.Event()
-    calls = {"n": 0}
+    target_calls = {"n": 0}
 
     def locking_page_links(title: str, *, limit: int, cont: str | None, timeout: float | None = None) -> dict:
+        if title != target:
+            return {"query": {"pages": {"1": {"links": []}}}}
         with client_lock:
-            calls["n"] += 1
-            n = calls["n"]
+            target_calls["n"] += 1
+            n = target_calls["n"]
             start = int(cont) if cont else 0
             window = links[start : start + limit]
             resp: dict = {"query": {"pages": {"1": {"links": window}}}}
@@ -487,9 +491,10 @@ def test_page_outlinks_client_unlocked_between_pagination(fake_client, make_ctx)
 
     thread = threading.Thread(target=concurrent)
     thread.start()
-    tools._page_outlinks(ctx, "2026-06 Alpha", cap=600)
+    result = tools._page_outlinks(ctx, target, cap=600)
     thread.join(timeout=5)
-    assert calls["n"] >= 2
+    assert result == expected
+    assert target_calls["n"] == 2
 
 
 # --- wiki_status ----------------------------------------------------------

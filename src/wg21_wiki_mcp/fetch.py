@@ -215,8 +215,10 @@ class PageFetcher:
         for title in candidates:
             entry = stale[title]
             if current.get(title) is not None and current[title] == entry.revid:
-                self._cache.touch(title)
-                refreshed = self._cache.get(title) or entry
+                with ExitStack() as stack:
+                    self._acquire_cross_process(stack, [title], deadline)
+                    self._cache.touch(title)
+                    refreshed = self._cache.get(title) or entry
                 outcomes[title] = _from_entry(refreshed, from_cache=True)
                 to_fetch.discard(title)
         return to_fetch
@@ -240,15 +242,19 @@ class PageFetcher:
             for title in titles:
                 timeout_remaining(deadline)
                 stack = ExitStack()
-                self._acquire_inproc(stack, [title], deadline)
-                if not refresh:
-                    entry = self._cache.get(title)
-                    if entry is not None and entry.age_seconds() < ttl_seconds:
-                        outcomes[title] = _from_entry(entry, from_cache=True)
-                        stack.close()
-                        continue
-                leaders.append(title)
-                inproc_stacks.append(stack)
+                try:
+                    self._acquire_inproc(stack, [title], deadline)
+                    if not refresh:
+                        entry = self._cache.get(title)
+                        if entry is not None and entry.age_seconds() < ttl_seconds:
+                            outcomes[title] = _from_entry(entry, from_cache=True)
+                            stack.close()
+                            continue
+                    leaders.append(title)
+                    inproc_stacks.append(stack)
+                except BaseException:
+                    stack.close()
+                    raise
 
             if not leaders:
                 return
