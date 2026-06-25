@@ -164,7 +164,13 @@ class FakeWikiClient:
 
     def page_links(self, title: str, *, limit: int, cont: str | None, timeout: float | None = None) -> dict:
         self.page_links_calls += 1
-        return {"query": {"pages": {"1": {"links": self.links.get(title, [])}}}}
+        pool = self.links.get(title, [])
+        start = int(cont) if cont else 0
+        window = pool[start : start + limit]
+        resp: dict = {"query": {"pages": {"1": {"links": window}}}}
+        if start + limit < len(pool):
+            resp["continue"] = {"plcontinue": str(start + limit)}
+        return resp
 
     def statistics(self) -> dict:  # pragma: no cover - unused by tests
         return {"query": {"statistics": {"pages": len(self.pages)}}}

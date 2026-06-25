@@ -451,6 +451,52 @@ def test_page_outlinks_respects_cap(fake_client, make_ctx):
     assert fake_client.page_links_calls == 1
 
 
+def test_page_outlinks_client_unlocked_between_pagination(fake_client, make_ctx):
+    """Each pagination iteration completes before the next page_links call starts."""
+    import threading
+
+    target = "2026-06 Alpha"
+    links = [{"title": f"{target}:Link{i}", "ns": 0} for i in range(600)]
+    fake_client.links[target] = links
+    expected = [f"{target}:Link{i}" for i in range(600)]
+    client_lock = threading.RLock()
+    first_batch_done = threading.Event()
+    concurrent_ok = threading.Event()
+    target_calls = {"n": 0}
+
+    def locking_page_links(title: str, *, limit: int, cont: str | None, timeout: float | None = None) -> dict:
+        if title != target:
+            return {"query": {"pages": {"1": {"links": []}}}}
+        with client_lock:
+            target_calls["n"] += 1
+            n = target_calls["n"]
+            start = int(cont) if cont else 0
+            window = links[start : start + limit]
+            resp: dict = {"query": {"pages": {"1": {"links": window}}}}
+            if start + limit < len(links):
+                resp["continue"] = {"plcontinue": str(start + limit)}
+        if n == 1:
+            first_batch_done.set()
+            if not concurrent_ok.wait(timeout=5):
+                raise AssertionError("concurrent page_links did not run between pagination calls")
+        return resp
+
+    fake_client.page_links = locking_page_links
+    ctx = make_ctx(fake_client)
+
+    def concurrent() -> None:
+        assert first_batch_done.wait(timeout=5)
+        fake_client.page_links("Other Page", limit=10, cont=None)
+        concurrent_ok.set()
+
+    thread = threading.Thread(target=concurrent)
+    thread.start()
+    result = tools._page_outlinks(ctx, target, cap=600)
+    thread.join(timeout=5)
+    assert result == expected
+    assert target_calls["n"] == 2
+
+
 # --- wiki_status ----------------------------------------------------------
 def test_wiki_status(fake_client, make_ctx):
     ctx = make_ctx(fake_client, calendar=FakeCalendar(active=True, mode="meeting"))
