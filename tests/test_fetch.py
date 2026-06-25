@@ -164,3 +164,41 @@ def test_get_pages_max_wait_raises_when_deadline_exceeded(fetcher_stack, monkeyp
     monkeypatch.setattr("wg21_wiki_mcp.fetch.time.monotonic", fake_monotonic)
     with pytest.raises(FetchError, match="timed out"):
         fetcher.get_pages(["P"], ttl_seconds=1000, max_wait_s=0.5)
+
+
+def test_fetch_releases_file_locks_during_network(fetcher_stack, monkeypatch):
+    """Cross-process file locks are not held for the full batched network fetch."""
+    from filelock import FileLock
+
+    fetcher, client, _ = fetcher_stack
+    for i in range(10):
+        client.pages[f"P{i}"] = FakePage(f"b{i}", i)
+
+    held = {"current": 0, "max": 0}
+    real_acquire = FileLock.acquire
+    real_release = FileLock.release
+
+    def tracking_acquire(self, timeout=-1):
+        real_acquire(self, timeout=timeout)
+        held["current"] += 1
+        held["max"] = max(held["max"], held["current"])
+
+    def tracking_release(self, force=False):
+        if not force:
+            held["current"] -= 1
+        real_release(self)
+
+    original_fetch = client.fetch_pages
+
+    def slow_fetch(titles, *, timeout=None):
+        assert held["max"] == 0, "file locks must not be held during network fetch"
+        time.sleep(0.05)
+        return original_fetch(titles, timeout=timeout)
+
+    monkeypatch.setattr(FileLock, "acquire", tracking_acquire)
+    monkeypatch.setattr(FileLock, "release", tracking_release)
+    monkeypatch.setattr(client, "fetch_pages", slow_fetch)
+
+    fetcher.get_pages([f"P{i}" for i in range(10)], ttl_seconds=1000)
+    assert held["max"] == 1
+    assert held["current"] == 0
