@@ -11,6 +11,9 @@ for the pre-1.0 API stability policy and deprecation timeline.
 ## [Unreleased]
 
 ### Added
+- PyPI publish workflow (`.github/workflows/publish.yml`) on `v*` tag push via
+  Trusted Publisher; `requirements-lock.txt` with CI lockfile reproducibility
+  gate; README PyPI install instructions and PyPI project URL in `pyproject.toml`.
 - CI canary smoke gate (`canary (secrets)`) and live tier wired to the `live-wiki`
   GitHub environment for personal secrets; per-module coverage floors, coverage
   XML artifact upload, and `@pytest.mark.canary` live smoke tests.

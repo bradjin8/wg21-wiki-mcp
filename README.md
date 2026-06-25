@@ -31,26 +31,30 @@ clickable URL and revision id so every answer can be verified.
 
 ## Install
 
-This package is not published to PyPI yet; install it from the GitHub source.
-Pin a released version (recommended for reproducibility) with `@v0.2.0`, or
-track the latest release with `@master` (the release branch). The simplest
-option is [`uv`](https://docs.astral.sh/uv/), which can run it without a manual
-install:
+Install from [PyPI](https://pypi.org/project/wg21-wiki-mcp/) (recommended):
 
 ```bash
-# pinned release (reproducible)
-uvx --from git+https://github.com/cppalliance/wg21-wiki-mcp.git@v0.2.0 wg21-wiki-mcp
-
-# or always the latest release (master tracks releases; --refresh bypasses uv's cache)
-uvx --refresh --from git+https://github.com/cppalliance/wg21-wiki-mcp.git@master wg21-wiki-mcp
+pipx install wg21-wiki-mcp
+# or, into a venv:
+pip install wg21-wiki-mcp
 ```
 
-Or install from git with pip/pipx:
+Pin a version for reproducibility, e.g. `pip install wg21-wiki-mcp==0.2.0`.
+
+Or run without a manual install via [`uv`](https://docs.astral.sh/uv/):
+
+```bash
+uvx wg21-wiki-mcp
+# pinned release:
+uvx --from wg21-wiki-mcp==0.2.0 wg21-wiki-mcp
+```
+
+Install from GitHub when you need a specific commit or branch:
 
 ```bash
 pipx install "git+https://github.com/cppalliance/wg21-wiki-mcp.git@v0.2.0"
-# or, into a venv:
-pip install "git+https://github.com/cppalliance/wg21-wiki-mcp.git@v0.2.0"
+# or track the latest release branch:
+uvx --refresh --from git+https://github.com/cppalliance/wg21-wiki-mcp.git@master wg21-wiki-mcp
 ```
 
 Or from a local clone (for development):
@@ -66,8 +70,8 @@ Requires Python 3.10+. Works on Windows, macOS, and Linux.
 ## Configure
 
 The wiki base URL is fixed (`https://wiki.isocpp.org`), so only credentials are
-needed. With an MCP host, pass them in the server's launch `env` block. Since the
-package is not on PyPI, run it from GitHub with `uvx`:
+needed. With an MCP host, pass them in the server's launch `env` block. The
+simplest setup uses the PyPI package via `uvx`:
 
 ```json
 {
@@ -76,7 +80,7 @@ package is not on PyPI, run it from GitHub with `uvx`:
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/cppalliance/wg21-wiki-mcp.git@v0.2.0",
+        "wg21-wiki-mcp==0.2.0",
         "wg21-wiki-mcp"
       ],
       "env": {
@@ -88,10 +92,10 @@ package is not on PyPI, run it from GitHub with `uvx`:
 }
 ```
 
-To always run the newest release instead of a pinned one, replace `@v0.2.0`
-with `@master` and add `"--refresh"` as the first entry in `args` (so `uv`
-re-resolves the branch rather than reusing its cache). Pinning a tag is
-recommended for a source-of-truth tool so behavior is reproducible.
+To always run the newest PyPI release instead of a pinned version, use
+`"wg21-wiki-mcp"` (no version pin) as the `--from` value. Pinning a version is
+recommended for a source-of-truth tool so behavior is reproducible. To install
+from Git instead, use `"git+https://github.com/cppalliance/wg21-wiki-mcp.git@v0.2.0"`.
 
 If you installed the console script (via pipx/pip), use `"command": "wg21-wiki-mcp"`
 with no `args` instead. To use your normal account instead of a bot password,
