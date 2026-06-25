@@ -7,6 +7,7 @@ MCP host supplies it through the server's launch ``env`` block.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Any, TypeVar
@@ -54,15 +55,17 @@ def _wrap(fn: Callable[..., _T], /, *args: Any, **kwargs: Any) -> _T:
 
 
 _state: dict[str, ServerContext] = {}
+_state_lock = threading.Lock()
 
 
 def get_context() -> ServerContext:
     """Return the shared server context, building it from the env on first use."""
-    ctx = _state.get("ctx")
-    if ctx is None:
-        ctx = ServerContext.create(Config.from_env())
-        _state["ctx"] = ctx
-    return ctx
+    with _state_lock:
+        ctx = _state.get("ctx")
+        if ctx is None:
+            ctx = ServerContext.create(Config.from_env())
+            _state["ctx"] = ctx
+        return ctx
 
 
 @asynccontextmanager
@@ -73,7 +76,8 @@ async def _lifespan(_server: FastMCP) -> AsyncIterator[dict]:
     try:
         yield {}
     finally:
-        shutdown_ctx = _state.pop("ctx", None)
+        with _state_lock:
+            shutdown_ctx = _state.pop("ctx", None)
         if shutdown_ctx is not None:
             shutdown_ctx.close()
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 
 import pytest
 from conftest import FakeCalendar, FakePage, FakeWikiClient, make_config
@@ -29,7 +30,10 @@ def test_all_tools_registered():
 
 
 def test_get_context_builds_from_env(monkeypatch, tmp_path):
-    server._state.pop("ctx", None)
+    with server._state_lock:
+        ctx = server._state.pop("ctx", None)
+    if ctx is not None:
+        ctx.close()
     monkeypatch.setenv("WIKI_BOT_USERNAME", "Acct@bot")
     monkeypatch.setenv("WIKI_BOT_PASSWORD", "secret")
     monkeypatch.setenv("ISOCPP_WIKI_CACHE_DIR", str(tmp_path / "c"))
@@ -38,7 +42,37 @@ def test_get_context_builds_from_env(monkeypatch, tmp_path):
         assert ctx.config.base_url == "https://wiki.isocpp.org"
         assert server.get_context() is ctx  # cached
     finally:
+        with server._state_lock:
+            ctx = server._state.pop("ctx", None)
+        if ctx is not None:
+            ctx.close()
+
+
+def test_get_context_thread_safe_initialization(monkeypatch, tmp_path):
+    with server._state_lock:
         ctx = server._state.pop("ctx", None)
+    if ctx is not None:
+        ctx.close()
+    monkeypatch.setenv("WIKI_BOT_USERNAME", "Acct@bot")
+    monkeypatch.setenv("WIKI_BOT_PASSWORD", "secret")
+    monkeypatch.setenv("ISOCPP_WIKI_CACHE_DIR", str(tmp_path / "c"))
+    contexts: list[ServerContext] = []
+    ready = threading.Barrier(8)
+
+    def worker() -> None:
+        ready.wait(timeout=5)
+        contexts.append(server.get_context())
+
+    try:
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+        assert len({id(ctx) for ctx in contexts}) == 1
+    finally:
+        with server._state_lock:
+            ctx = server._state.pop("ctx", None)
         if ctx is not None:
             ctx.close()
 
@@ -80,7 +114,8 @@ def test_lifespan_runs(monkeypatch, tmp_path):
     ctx = _fake_ctx(tmp_path)
 
     def _get_ctx() -> ServerContext:
-        server._state["ctx"] = ctx
+        with server._state_lock:
+            server._state["ctx"] = ctx
         return ctx
 
     monkeypatch.setattr(server, "get_context", _get_ctx)
