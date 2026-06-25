@@ -161,7 +161,9 @@ lockfile is stale.
 
 When you change runtime dependencies in `pyproject.toml`, regenerate the
 lockfile on Linux (or any environment where `pip-compile` resolves the same
-graph as CI) and commit the result:
+graph as CI) and commit the result. CI runs on `ubuntu-latest` with Python
+3.12 — do not commit a Windows-generated lockfile, which may include
+platform-only transitive deps (`colorama`, `pywin32`) that Linux omits.
 
 ```bash
 pip install pip-tools
