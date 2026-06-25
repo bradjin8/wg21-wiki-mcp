@@ -34,7 +34,8 @@ hygiene); the test suite runs via `pytest`/CI, not in the commit hook.
 ```bash
 ruff check src tests        # lint
 mypy src                    # type-check
-pytest -m "not live"        # offline tests + 90% coverage gate
+pytest -m "not live and not latency_gate"  # offline tests + 95% coverage gate
+pytest -m latency_gate      # meeting-time load/latency gate (ubuntu/py3.12 in CI)
 ```
 
 The offline suite mocks the network with synthetic fixtures and needs no

@@ -56,11 +56,14 @@ def _wrap(fn: Callable[..., _T], /, *args: Any, **kwargs: Any) -> _T:
 
 _state: dict[str, ServerContext] = {}
 _state_lock = threading.Lock()
+_shutting_down = False
 
 
 def get_context() -> ServerContext:
     """Return the shared server context, building it from the env on first use."""
     with _state_lock:
+        if _shutting_down:
+            raise RuntimeError("Server is shutting down; cannot create a new context.")
         ctx = _state.get("ctx")
         if ctx is None:
             ctx = ServerContext.create(Config.from_env())
@@ -76,10 +79,16 @@ async def _lifespan(_server: FastMCP) -> AsyncIterator[dict]:
     try:
         yield {}
     finally:
+        global _shutting_down
         with _state_lock:
+            _shutting_down = True
             shutdown_ctx = _state.pop("ctx", None)
-        if shutdown_ctx is not None:
-            shutdown_ctx.close()
+        try:
+            if shutdown_ctx is not None:
+                shutdown_ctx.close()
+        finally:
+            with _state_lock:
+                _shutting_down = False
 
 
 mcp = FastMCP(

@@ -48,6 +48,23 @@ def test_get_context_builds_from_env(monkeypatch, tmp_path):
             ctx.close()
 
 
+def test_get_context_refuses_during_shutdown(monkeypatch, tmp_path):
+    with server._state_lock:
+        ctx = server._state.pop("ctx", None)
+        server._shutting_down = True
+    if ctx is not None:
+        ctx.close()
+    monkeypatch.setenv("WIKI_BOT_USERNAME", "Acct@bot")
+    monkeypatch.setenv("WIKI_BOT_PASSWORD", "secret")
+    monkeypatch.setenv("ISOCPP_WIKI_CACHE_DIR", str(tmp_path / "c"))
+    try:
+        with pytest.raises(RuntimeError, match="shutting down"):
+            server.get_context()
+    finally:
+        with server._state_lock:
+            server._shutting_down = False
+
+
 def test_get_context_thread_safe_initialization(monkeypatch, tmp_path):
     with server._state_lock:
         ctx = server._state.pop("ctx", None)
@@ -69,6 +86,8 @@ def test_get_context_thread_safe_initialization(monkeypatch, tmp_path):
             thread.start()
         for thread in threads:
             thread.join(timeout=10)
+        assert not any(thread.is_alive() for thread in threads)
+        assert len(contexts) == 8
         assert len({id(ctx) for ctx in contexts}) == 1
     finally:
         with server._state_lock:
