@@ -202,3 +202,128 @@ def test_fetch_releases_file_locks_during_network(fetcher_stack, monkeypatch):
     fetcher.get_pages([f"P{i}" for i in range(10)], ttl_seconds=1000)
     assert held["max"] == 1
     assert held["current"] == 0
+
+
+def test_resolve_network_recheck_serves_fresh_cache(fetcher_stack):
+    """Simulate a peer process refreshing the cache before the network path runs."""
+    fetcher, client, cache = fetcher_stack
+    client.pages["P"] = FakePage("body", 1)
+    fetcher.get_page("P", ttl_seconds=0)
+    before = client.fetch_calls
+
+    original = fetcher._resolve_network
+
+    def touch_stale_then_resolve(
+        titles: list[str],
+        stale: dict,
+        ttl_seconds: int,
+        refresh: bool,
+        outcomes: dict,
+        deadline: float | None = None,
+    ) -> None:
+        for title in titles:
+            if title in stale:
+                cache.touch(title)
+        original(titles, stale, ttl_seconds, refresh, outcomes, deadline)
+
+    fetcher._resolve_network = touch_stale_then_resolve  # type: ignore[method-assign]
+    out = fetcher.get_page("P", ttl_seconds=1000)
+    assert out.from_cache is True
+    assert client.fetch_calls == before
+
+
+def test_cross_process_lock_timeout_with_deadline_raises(fetcher_stack, monkeypatch):
+    from filelock import FileLock, Timeout
+
+    fetcher, client, _ = fetcher_stack
+    client.pages["P"] = FakePage("body", 1)
+
+    def always_timeout(self, timeout=-1):
+        raise Timeout(self)
+
+    monkeypatch.setattr(FileLock, "acquire", always_timeout)
+    with pytest.raises(FetchError, match="timed out"):
+        fetcher.get_pages(["P"], ttl_seconds=1000, max_wait_s=30.0)
+
+
+def test_inproc_lock_timeout_with_deadline_raises(fetcher_stack, monkeypatch):
+    fetcher, client, _ = fetcher_stack
+    client.pages["P"] = FakePage("body", 1)
+    fetcher.get_page("P", ttl_seconds=1000)
+    started = threading.Event()
+    original = client.fetch_pages
+
+    def slow_fetch(titles, *, timeout=None):
+        started.set()
+        time.sleep(1.0)
+        return original(titles, timeout=timeout)
+
+    monkeypatch.setattr(client, "fetch_pages", slow_fetch)
+
+    errors: list[FetchError] = []
+
+    def holder():
+        fetcher.get_pages(["P"], ttl_seconds=1000, refresh=True)
+
+    def waiter():
+        try:
+            fetcher.get_pages(["P"], ttl_seconds=1000, refresh=True, max_wait_s=0.05)
+        except FetchError as exc:
+            errors.append(exc)
+
+    holder_thread = threading.Thread(target=holder)
+    waiter_thread = threading.Thread(target=waiter)
+    holder_thread.start()
+    started.wait(timeout=2.0)
+    waiter_thread.start()
+    holder_thread.join(timeout=5.0)
+    waiter_thread.join(timeout=5.0)
+    assert len(errors) == 1
+    assert "timed out" in str(errors[0]).lower()
+
+
+def test_section_served_from_cache_under_lock(fetcher_stack, monkeypatch):
+    fetcher, client, _ = fetcher_stack
+    client.pages["P"] = FakePage("body", 1)
+    started = threading.Event()
+    original = client.fetch_page_section
+
+    def slow_section(title: str, section: int):
+        started.set()
+        time.sleep(0.5)
+        return original(title, section)
+
+    monkeypatch.setattr(client, "fetch_page_section", slow_section)
+
+    second: list = []
+
+    def first():
+        fetcher.get_page_section("P", 1, ttl_seconds=1000)
+
+    def waiter():
+        started.wait(timeout=2.0)
+        second.append(fetcher.get_page_section("P", 1, ttl_seconds=1000))
+
+    threads = [threading.Thread(target=first), threading.Thread(target=waiter)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5.0)
+    assert second[0].from_cache is True
+    assert client.section_fetch_calls == 1
+
+
+def test_store_loop_serves_fresh_cache_after_network(fetcher_stack, monkeypatch):
+    fetcher, client, cache = fetcher_stack
+    client.pages["P"] = FakePage("body", 1)
+    fetcher.get_page("P", ttl_seconds=0)
+    original = client.fetch_pages
+
+    def touch_then_fetch(titles, *, timeout=None):
+        for title in titles:
+            cache.touch(title)
+        return original(titles, timeout=timeout)
+
+    monkeypatch.setattr(client, "fetch_pages", touch_then_fetch)
+    out = fetcher.get_page("P", ttl_seconds=1000)
+    assert out.from_cache is True
