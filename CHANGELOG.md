@@ -14,6 +14,11 @@ for the pre-1.0 API stability policy and deprecation timeline.
 - PyPI publish workflow (`.github/workflows/publish.yml`) on `v*` tag push via
   Trusted Publisher; `requirements-lock.txt` with CI lockfile reproducibility
   gate; README PyPI install instructions and PyPI project URL in `pyproject.toml`.
+- Release supply-chain hardening: GitHub Actions and pre-commit hooks pinned to
+  full SHA digests; publish workflow generates a CycloneDX SBOM, signs
+  distributions with Sigstore, and attaches the SBOM plus `.sigstore.json`
+  bundles to the GitHub Release; Dependabot `pin-actions` group keeps action
+  SHA pins current.
 - CI canary smoke gate (`canary (secrets)`) and live tier wired to the `live-wiki`
   GitHub environment for personal secrets; per-module coverage floors, coverage
   XML artifact upload, and `@pytest.mark.canary` live smoke tests.
