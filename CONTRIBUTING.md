@@ -108,7 +108,8 @@ This repository is maintained by The C++ Alliance. Review expectations:
 - All changes land via pull request against `develop` (release merges use
   `develop` → `master`).
 - [CODEOWNERS](CODEOWNERS) maps critical paths (`src/`, `.github/`, `pyproject.toml`)
-  to `@bradjin8`; GitHub automatically requests review from those owners.
+  to `@bradjin8` and `@wpak-ai`; GitHub automatically requests review from those
+  owners.
 - At least **one approving review** from a code owner is required before merge.
 - All CI status checks must pass (see below).
 - Maintainers merge after approval; external contributors cannot self-merge.
