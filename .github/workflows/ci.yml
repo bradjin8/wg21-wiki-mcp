@@ -18,6 +18,30 @@ env:
   GITLEAKS_VERSION: "8.24.2"
 
 jobs:
+  lockfile:
+    name: lockfile reproducibility
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install from lockfile
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-lock.txt
+          pip install --no-deps .
+          python -c "import wg21_wiki_mcp; print(wg21_wiki_mcp.__version__)"
+      - name: Verify lockfile is current
+        run: |
+          pip install pip-tools==7.5.3
+          pip-compile pyproject.toml --output-file=requirements-lock.txt --strip-extras
+          git diff --exit-code requirements-lock.txt
+
   pre-commit:
     name: pre-commit
     runs-on: ubuntu-latest
