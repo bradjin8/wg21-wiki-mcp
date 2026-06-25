@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from conftest import FakePage, FakeWikiClient
@@ -20,6 +21,22 @@ def fetcher_stack(tmp_path):
     fetcher = PageFetcher(client, cache)
     yield fetcher, client, cache
     cache.close()
+
+
+def _backdate_cache_entry(cache: Cache, title: str, *, age_seconds: int = 3600) -> None:
+    entry = cache.get(title)
+    assert entry is not None
+    old = (datetime.now(timezone.utc) - timedelta(seconds=age_seconds)).isoformat()
+    cache.put(
+        requested_title=entry.requested_title,
+        title=entry.title,
+        redirected_from=entry.redirected_from,
+        revid=entry.revid,
+        timestamp=entry.timestamp,
+        size=entry.size,
+        content=entry.content,
+        fetched_at=old,
+    )
 
 
 def test_cache_miss_then_hit(fetcher_stack):
@@ -208,9 +225,11 @@ def test_resolve_network_recheck_serves_fresh_cache(fetcher_stack):
     """Simulate a peer process refreshing the cache before the network path runs."""
     fetcher, client, cache = fetcher_stack
     client.pages["P"] = FakePage("body", 1)
-    fetcher.get_page("P", ttl_seconds=0)
+    fetcher.get_page("P", ttl_seconds=1000)
     before = client.fetch_calls
+    _backdate_cache_entry(cache, "P")
 
+    resolve_called = False
     original = fetcher._resolve_network
 
     def touch_stale_then_resolve(
@@ -221,6 +240,8 @@ def test_resolve_network_recheck_serves_fresh_cache(fetcher_stack):
         outcomes: dict,
         deadline: float | None = None,
     ) -> None:
+        nonlocal resolve_called
+        resolve_called = True
         for title in titles:
             if title in stale:
                 cache.touch(title)
@@ -228,6 +249,7 @@ def test_resolve_network_recheck_serves_fresh_cache(fetcher_stack):
 
     fetcher._resolve_network = touch_stale_then_resolve  # type: ignore[method-assign]
     out = fetcher.get_page("P", ttl_seconds=1000)
+    assert resolve_called
     assert out.from_cache is True
     assert client.fetch_calls == before
 
@@ -316,14 +338,22 @@ def test_section_served_from_cache_under_lock(fetcher_stack, monkeypatch):
 def test_store_loop_serves_fresh_cache_after_network(fetcher_stack, monkeypatch):
     fetcher, client, cache = fetcher_stack
     client.pages["P"] = FakePage("body", 1)
-    fetcher.get_page("P", ttl_seconds=0)
+    fetcher.get_page("P", ttl_seconds=1000)
+    _backdate_cache_entry(cache, "P")
+    # Force past cheap revalidation so _fetch_and_store runs fetch_pages.
+    client.pages["P"] = FakePage("body", 2)
     original = client.fetch_pages
 
+    fetch_called = False
+
     def touch_then_fetch(titles, *, timeout=None):
+        nonlocal fetch_called
+        fetch_called = True
         for title in titles:
             cache.touch(title)
         return original(titles, timeout=timeout)
 
     monkeypatch.setattr(client, "fetch_pages", touch_then_fetch)
     out = fetcher.get_page("P", ttl_seconds=1000)
+    assert fetch_called
     assert out.from_cache is True
