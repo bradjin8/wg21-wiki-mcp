@@ -8,14 +8,23 @@ opaque cursors; ``get_page`` chunks long pages on UTF-8 boundaries.
 
 from __future__ import annotations
 
+import json
 import re
+import threading
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Literal
 
+from .cache import CacheEntry, title_hash
 from .context import ServerContext
+from .deadlines import MEETING_TOOL_TIMEOUT_MSG, composite_deadline, timeout_remaining
+from .fetch import DEFAULT_COMPOSITE_MAX_WAIT_S
 from .log import get_logger
 from .log_safety import safe_exception_summary
 from .models import (
     BundledPage,
     Chunk,
+    FetchError,
     IsoSlot,
     MeetingList,
     MeetingOverview,
@@ -42,10 +51,179 @@ _DEFAULT_PAGE_MAX_BYTES = 48 * 1024
 _DEFAULT_BUNDLE_PAGE_MAX_BYTES = 8 * 1024
 _MAX_LIST_LIMIT = 50
 _MAX_NS_PAGE_LIMIT = 500
+_OUTLINKS_KEY_SEP = "\0outlinks="
+_MAX_OUTLINKS_LOCK_ENTRIES = 256
+
+
+@dataclass
+class _OutlinksLockSlot:
+    """Per-meeting outlink lock with a user count for safe map eviction."""
+
+    lock: threading.Lock
+    users: int = 0
+
+
+_outlinks_locks: dict[str, _OutlinksLockSlot] = {}
+_outlinks_lock_guard = threading.Lock()
+
+
+def _remaining(deadline: float | None) -> float | None:
+    return timeout_remaining(deadline, on_exceeded=MEETING_TOOL_TIMEOUT_MSG)
+
+
+def _evict_idle_outlinks_locks() -> None:
+    if len(_outlinks_locks) <= _MAX_OUTLINKS_LOCK_ENTRIES:
+        return
+    for key, slot in list(_outlinks_locks.items()):
+        if slot.users == 0 and not slot.lock.locked():
+            del _outlinks_locks[key]
+        if len(_outlinks_locks) <= _MAX_OUTLINKS_LOCK_ENTRIES:
+            return
+
+
+def _acquire_outlinks_lock(key: str, deadline: float | None) -> threading.Lock:
+    with _outlinks_lock_guard:
+        slot = _outlinks_locks.get(key)
+        if slot is None:
+            slot = _OutlinksLockSlot(threading.Lock())
+            _outlinks_locks[key] = slot
+        slot.users += 1
+        lock = slot.lock
+    if deadline is not None:
+        remaining = _remaining(deadline)
+        assert remaining is not None
+        if not lock.acquire(timeout=remaining):
+            _release_outlinks_lock(key, lock, acquired=False)
+            raise FetchError("Meeting tool timed out waiting for the wiki.")
+    else:
+        lock.acquire()
+    return lock
+
+
+def _release_outlinks_lock(key: str, lock: threading.Lock, *, acquired: bool = True) -> None:
+    if acquired:
+        lock.release()
+    with _outlinks_lock_guard:
+        slot = _outlinks_locks.get(key)
+        if slot is None or slot.lock is not lock:
+            return
+        slot.users -= 1
+        if slot.users == 0 and not lock.locked():
+            del _outlinks_locks[key]
+        _evict_idle_outlinks_locks()
 
 
 def _clamp(value: int, lo: int, hi: int) -> int:
     return max(lo, min(value, hi))
+
+
+def outlinks_cache_key(title: str) -> str:
+    """Return the cache key for a meeting page's outlink index."""
+    return f"{title}{_OUTLINKS_KEY_SEP}"
+
+
+def _page_outlinks(
+    ctx: ServerContext,
+    title: str,
+    *,
+    cap: int = 500,
+    deadline: float | None = None,
+) -> list[str]:
+    """All internal links on a page (paginated up to ``cap``)."""
+    links: list[str] = []
+    cont: str | None = None
+    while len(links) < cap:
+        batch_limit = min(500, cap - len(links))
+        resp = ctx.client.page_links(
+            title,
+            limit=batch_limit,
+            cont=cont,
+            timeout=_remaining(deadline),
+        )
+        for page in resp.get("query", {}).get("pages", {}).values():
+            for link in page.get("links", []):
+                if link.get("ns", 0) >= 0:
+                    links.append(link["title"])
+                    if len(links) >= cap:
+                        break
+            if len(links) >= cap:
+                break
+        if len(links) >= cap:
+            break
+        cont = resp.get("continue", {}).get("plcontinue")
+        if not cont:
+            break
+    return links
+
+
+def _load_outlinks(entry: CacheEntry) -> list[str]:
+    return json.loads(entry.content)
+
+
+def _serve_stale_outlinks(
+    entry: CacheEntry,
+    title: str,
+    *,
+    reason: Literal["lock_contention", "discovery_timeout"],
+) -> list[str]:
+    links = _load_outlinks(entry)
+    logger.debug(
+        "Serving stale outlink index (title_hash=%s, reason=%s, link_count=%d, age_s=%.1f)",
+        title_hash(title),
+        reason,
+        len(links),
+        entry.age_seconds(),
+    )
+    return links
+
+
+def _cached_page_outlinks(
+    ctx: ServerContext,
+    title: str,
+    *,
+    cap: int = 500,
+    deadline: float | None = None,
+) -> list[str]:
+    """Outlink index for ``title``, cached for the current meeting-aware TTL."""
+    ttl_seconds = ctx.current_ttl()
+    key = outlinks_cache_key(title)
+    entry = ctx.cache.get(key)
+    stale_entry = entry
+    if entry is not None and entry.age_seconds() < ttl_seconds:
+        return _load_outlinks(entry)
+
+    try:
+        lock = _acquire_outlinks_lock(key, deadline)
+    except FetchError:
+        if stale_entry is not None:
+            return _serve_stale_outlinks(stale_entry, title, reason="lock_contention")
+        raise
+    try:
+        entry = ctx.cache.get(key)
+        if entry is not None:
+            stale_entry = entry
+        if entry is not None and entry.age_seconds() < ttl_seconds:
+            return _load_outlinks(entry)
+        try:
+            links = _page_outlinks(ctx, title, cap=cap, deadline=deadline)
+        except FetchError:
+            if stale_entry is not None:
+                return _serve_stale_outlinks(stale_entry, title, reason="discovery_timeout")
+            raise
+        fetched_at = datetime.now(timezone.utc).isoformat()
+        ctx.cache.put(
+            requested_title=key,
+            title=title,
+            redirected_from=None,
+            revid=None,
+            timestamp=None,
+            size=None,
+            content=json.dumps(links),
+            fetched_at=fetched_at,
+        )
+        return links
+    finally:
+        _release_outlinks_lock(key, lock)
 
 
 def _lookup_namespace_name(ctx: ServerContext, namespace_id: int) -> str | None:
@@ -109,6 +287,7 @@ def get_page(
     max_bytes: int = _DEFAULT_PAGE_MAX_BYTES,
     cursor: str | None = None,
     refresh: bool = False,
+    max_wait_s: float | None = None,
 ) -> PageContent:
     """Return verbatim wikitext for a page (or one section), chunked if large.
 
@@ -126,7 +305,12 @@ def get_page(
             refresh=refresh,
         )
     else:
-        outcome = ctx.fetcher.get_page(title, ttl_seconds=ctx.current_ttl(), refresh=refresh)
+        outcome = ctx.fetcher.get_page(
+            title,
+            ttl_seconds=ctx.current_ttl(),
+            refresh=refresh,
+            max_wait_s=max_wait_s,
+        )
     if outcome.missing or outcome.content is None:
         if section is not None:
             raise PageNotFound(f"Page or section not found: {title!r} section {section}")
@@ -287,28 +471,15 @@ def get_recent_changes(
 # --------------------------------------------------------------------------- #
 # get_meeting_overview
 # --------------------------------------------------------------------------- #
-def _page_outlinks(ctx: ServerContext, title: str, *, cap: int = 500) -> list[str]:
-    """All internal links on a page (paginated up to ``cap``)."""
-    links: list[str] = []
-    cont: str | None = None
-    while len(links) < cap:
-        resp = ctx.client.page_links(title, limit=500, cont=cont)
-        for page in resp.get("query", {}).get("pages", {}).values():
-            for link in page.get("links", []):
-                if link.get("ns", 0) >= 0:
-                    links.append(link["title"])
-        cont = resp.get("continue", {}).get("plcontinue")
-        if not cont:
-            break
-    return links
-
-
 def get_meeting_overview(ctx: ServerContext, meeting: str | None = None) -> MeetingOverview:
     """Return a meeting's landing page (verbatim) plus its deterministic outlink index."""
+    deadline = composite_deadline(DEFAULT_COMPOSITE_MAX_WAIT_S)
     title = _resolve_meeting(ctx, meeting)
-    home = get_page(ctx, title)
+    home = get_page(ctx, title, max_wait_s=_remaining(deadline))
     outlinks = [
-        PageRef(title=t, url=ctx.client.canonical_url(t)) for t in _page_outlinks(ctx, title) if t.startswith(title)
+        PageRef(title=t, url=ctx.client.canonical_url(t))
+        for t in _cached_page_outlinks(ctx, title, deadline=deadline)
+        if t.startswith(title)
     ]
     return MeetingOverview(meeting=title, home=home, outlinks=outlinks)
 
@@ -333,9 +504,18 @@ def get_meeting_sessions(
     title = _resolve_meeting(ctx, meeting)
     max_page_bytes = _clamp(max_page_bytes, 512, 64 * 1024)
     group_tokens = [g.lower() for g in (groups or [])]
+    deadline = composite_deadline(DEFAULT_COMPOSITE_MAX_WAIT_S)
 
-    candidates = [t for t in _page_outlinks(ctx, title) if t.startswith(title)]
-    fetched = ctx.fetcher.get_pages(candidates, ttl_seconds=ctx.current_ttl()) if candidates else {}
+    candidates = [t for t in _cached_page_outlinks(ctx, title, deadline=deadline) if t.startswith(title)]
+    fetched = (
+        ctx.fetcher.get_pages(
+            candidates,
+            ttl_seconds=ctx.current_ttl(),
+            max_wait_s=_remaining(deadline),
+        )
+        if candidates
+        else {}
+    )
 
     iso_slots: list[IsoSlot] = []
     iso_status = "not_found"

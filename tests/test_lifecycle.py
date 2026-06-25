@@ -179,7 +179,7 @@ def test_inproc_lock_single_flight_under_slow_fetch(tmp_path):
     allow_finish = threading.Event()
     real_fetch = client.fetch_pages
 
-    def gated_fetch(titles: list[str]):
+    def gated_fetch(titles: list[str], *, timeout: float | None = None):
         inside_fetch.set()
         assert allow_finish.wait(timeout=5)
         return real_fetch(titles)
