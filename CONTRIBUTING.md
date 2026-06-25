@@ -134,6 +134,7 @@ workflow), not by logical groupings — select each check individually in
 **Settings → Branches → Branch protection rules → Require status checks**.
 
 - **pre-commit**
+- **lockfile reproducibility**
 - **secret scan (gitleaks)**
 - **canary (secrets)** — minimal live smoke (bot login + one read-only tool) when
   the `live-wiki` environment secrets are configured; auto-skips on forks
@@ -152,6 +153,21 @@ Configure these rules under **Settings → Branches → Branch protection rules*
 the GitHub repository. This document is the source of truth for what those rules
 should enforce.
 
+## Dependency lockfile
+
+Runtime dependencies are pinned in [requirements-lock.txt](requirements-lock.txt)
+(generated with `pip-compile`). CI installs from that file and fails if the
+lockfile is stale.
+
+When you change runtime dependencies in `pyproject.toml`, regenerate the
+lockfile on Linux (or any environment where `pip-compile` resolves the same
+graph as CI) and commit the result:
+
+```bash
+pip install pip-tools
+pip-compile pyproject.toml --output-file=requirements-lock.txt --strip-extras
+```
+
 ## Branching and releases
 
 - `develop` is the default branch where day-to-day work lands.
@@ -166,4 +182,9 @@ should enforce.
   3. Open a PR from `develop` to `master`; merge once CI is green.
   4. Tag the merge commit on `master` and push the tag:
      `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`.
-  5. Create the GitHub Release from that tag.
+  5. The [publish workflow](.github/workflows/publish.yml) uploads the sdist and
+     wheel to PyPI via Trusted Publisher (OIDC). Configure the `pypi` GitHub
+     environment and the matching trusted publisher on
+     [pypi.org/project/wg21-wiki-mcp](https://pypi.org/project/wg21-wiki-mcp/)
+     before the first tag push.
+  6. Create the GitHub Release from that tag.

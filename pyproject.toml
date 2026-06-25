@@ -49,6 +49,7 @@ wg21-wiki-mcp = "wg21_wiki_mcp.server:main"
 [project.urls]
 Homepage = "https://github.com/cppalliance/wg21-wiki-mcp"
 Documentation = "https://github.com/cppalliance/wg21-wiki-mcp#readme"
+PyPI = "https://pypi.org/project/wg21-wiki-mcp/"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/wg21_wiki_mcp"]
