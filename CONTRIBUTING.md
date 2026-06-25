@@ -184,6 +184,8 @@ pip-compile pyproject.toml --output-file=requirements-lock.txt --strip-extras
   3. Open a PR from `develop` to `master`; merge once CI is green.
   4. Tag the merge commit on `master` and push the tag:
      `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`.
+     The tag must match the bumped `version` / `__version__`; [publish.yml](.github/workflows/publish.yml)
+     fails the build otherwise.
   5. The [publish workflow](.github/workflows/publish.yml) uploads the sdist and
      wheel to PyPI via Trusted Publisher (OIDC). Configure the `pypi` GitHub
      environment and the matching trusted publisher on
