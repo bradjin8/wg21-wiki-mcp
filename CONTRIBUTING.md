@@ -34,7 +34,8 @@ hygiene); the test suite runs via `pytest`/CI, not in the commit hook.
 ```bash
 ruff check src tests        # lint
 mypy src                    # type-check
-pytest -m "not live"        # offline tests + 90% coverage gate
+pytest -m "not live and not latency_gate"  # offline tests + 95% coverage gate
+pytest -m latency_gate      # meeting-time load/latency gate (ubuntu/py3.12 in CI)
 ```
 
 The offline suite mocks the network with synthetic fixtures and needs no
@@ -108,7 +109,8 @@ This repository is maintained by The C++ Alliance. Review expectations:
 - All changes land via pull request against `develop` (release merges use
   `develop` → `master`).
 - [CODEOWNERS](CODEOWNERS) maps critical paths (`src/`, `.github/`, `pyproject.toml`)
-  to `@bradjin8`; GitHub automatically requests review from those owners.
+  to `@bradjin8` and `@wpak-ai`; GitHub automatically requests review from those
+  owners.
 - At least **one approving review** from a code owner is required before merge.
 - All CI status checks must pass (see below).
 - Maintainers merge after approval; external contributors cannot self-merge.
@@ -118,7 +120,8 @@ Those PRs follow the same review and CI requirements as hand-written changes.
 
 ## Branch protection
 
-`develop` and `master` are protected branches. Expected GitHub settings:
+`develop` and `master` are protected by the repository ruleset
+**`wg21-wiki-mcp-protection`** (Settings → Rules → Rulesets). Expected rules:
 
 | Rule | `develop` | `master` |
 |------|-----------|----------|
@@ -128,10 +131,9 @@ Those PRs follow the same review and CI requirements as hand-written changes.
 | Allow force pushes | no | no |
 | Allow deletions | no | no |
 
-Required CI checks (must be green before merge). GitHub branch protection
-matches checks by their **exact job display name** (the `name:` field in the
-workflow), not by logical groupings — select each check individually in
-**Settings → Branches → Branch protection rules → Require status checks**.
+Required CI checks (must be green before merge). The ruleset matches checks by
+their **exact job display name** (the `name:` field in the workflow), not by
+logical groupings — select each check individually when editing the ruleset.
 
 - **pre-commit**
 - **lockfile reproducibility**
@@ -147,10 +149,12 @@ workflow), not by logical groupings — select each check individually in
   - `offline (macos-latest, py3.10)` … `offline (macos-latest, py3.13)`
 
 Each offline job runs ruff, mypy, pytest, and the coverage gate on its
-OS/Python combination.
+OS/Python combination. The `offline (ubuntu-latest, py3.12)` job also runs a
+**Meeting-time latency gate** step (`pytest -m latency_gate`) for composite
+meeting-path timing regressions; failure fails that matrix job.
 
-Configure these rules under **Settings → Branches → Branch protection rules** in
-the GitHub repository. This document is the source of truth for what those rules
+Configure or audit these rules under **Settings → Rules → Rulesets** in the
+GitHub repository. This document is the source of truth for what those rules
 should enforce.
 
 ## Dependency lockfile
@@ -192,6 +196,7 @@ pip-compile pyproject.toml --output-file=requirements-lock.txt --strip-extras
      Release (if missing) with those artifacts attached. Configure the `pypi`
      GitHub environment and the matching trusted publisher on
      [pypi.org/project/wg21-wiki-mcp](https://pypi.org/project/wg21-wiki-mcp/)
-     before the first tag push.
+     before the first tag push. See [docs/FIRST_PYPI_PUBLISH.md](docs/FIRST_PYPI_PUBLISH.md)
+     for the one-time checklist.
   6. Review the auto-created GitHub Release notes and Sigstore bundles on the
      release assets tab; edit the release description if needed.

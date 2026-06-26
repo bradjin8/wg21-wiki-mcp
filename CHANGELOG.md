@@ -11,6 +11,10 @@ for the pre-1.0 API stability policy and deprecation timeline.
 ## [Unreleased]
 
 ### Added
+- `docs/API.md`: rendered MCP tool reference (parameters, return types, programmatic access).
+- `docs/FIRST_PYPI_PUBLISH.md`: one-time Trusted Publisher checklist for the first PyPI release.
+- Meeting-time **latency gate** CI step on `ubuntu-latest` / Python 3.12 (`pytest -m latency_gate`).
+- Thread-safe `get_context()` / lifespan shutdown via `_state_lock` in `server.py`.
 - PyPI publish workflow (`.github/workflows/publish.yml`) on `v*` tag push via
   Trusted Publisher; `requirements-lock.txt` with CI lockfile reproducibility
   gate; README PyPI install instructions and PyPI project URL in `pyproject.toml`.
@@ -35,6 +39,10 @@ for the pre-1.0 API stability policy and deprecation timeline.
   Documented in ARCHITECTURE.md and docs/RUNBOOK.md.
 - Debug log when stale outlink index is served after lock contention or discovery
   timeout (`title_hash` only; no page titles in logs).
+
+### Changed
+- `CODEOWNERS` and `CONTRIBUTING.md`: add `@wpak-ai` as co-maintainer on all owned paths.
+- `CONTRIBUTING.md`: document ruleset `wg21-wiki-mcp-protection` (replaces legacy branch-protection UI wording).
 
 ### Fixed
 - `WikiClient.api()`: release the RLock before retry backoff sleep so concurrent

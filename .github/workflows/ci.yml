@@ -85,7 +85,10 @@ jobs:
       - name: Type-check (mypy)
         run: mypy src
       - name: Tests + coverage gate (offline)
-        run: pytest -m "not live"
+        run: pytest -m "not live and not latency_gate"
+      - name: Meeting-time latency gate
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: pytest -m latency_gate -q --cov-append --cov-fail-under=0
       - name: Per-module coverage gates
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         run: |
