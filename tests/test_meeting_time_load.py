@@ -5,9 +5,12 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
 from conftest import FakeCalendar, FakePage
 
 from wg21_wiki_mcp import tools
+
+pytestmark = pytest.mark.latency_gate
 
 
 def _meeting_fixture(fake_client) -> None:

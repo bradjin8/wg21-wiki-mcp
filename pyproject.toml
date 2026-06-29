@@ -61,6 +61,7 @@ addopts = "--cov=wg21_wiki_mcp --cov-branch --cov-report=term-missing --cov-fail
 markers = [
     "live: tests that hit the real wiki using configured credentials (skipped without them)",
     "canary: minimal live smoke (bot login + one read-only tool; subset of live)",
+    "latency_gate: meeting-time composite latency regressions (ubuntu/py3.12 CI gate)",
 ]
 
 [tool.coverage.run]
