@@ -19,8 +19,12 @@ Full-text search the wiki.
 | `limit` | `int` | `10` | Max hits per page of results. |
 | `namespace` | `int \| None` | `None` | Restrict to a namespace id (`list_namespaces`). |
 | `cursor` | `str \| None` | `None` | Opaque pagination cursor from a prior response. |
+| `include_snippet` | `bool` | `False` | When `True`, include API-generated search excerpts (non-verbatim). |
 
-**Returns:** `SearchResults` — titles, API snippets (non-verbatim), URLs, optional `next_cursor`.
+**Returns:** `SearchResults` — titles, URLs, optional `next_cursor`, and `include_snippet`
+echoing the caller's opt-in. Snippets are omitted unless `include_snippet=True`; they are
+truncated, reformatted excerpts and must not be cited as verbatim wiki content — use
+`get_page` for authoritative text.
 
 ## `get_page`
 

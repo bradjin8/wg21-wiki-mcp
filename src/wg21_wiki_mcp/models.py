@@ -76,7 +76,7 @@ class PageContent(BaseModel):
 
 
 class SearchHit(BaseModel):
-    """A single CirrusSearch result. The snippet is API-generated, not verbatim."""
+    """A single CirrusSearch result. Snippet is present only when the caller opted in."""
 
     title: str
     namespace: int
@@ -84,7 +84,6 @@ class SearchHit(BaseModel):
     wordcount: int | None = None
     timestamp: str | None = None
     snippet: str | None = None
-    snippet_warning: str = "mediawiki_generated_not_verbatim"
     url: str
 
 
@@ -93,6 +92,10 @@ class SearchResults(BaseModel):
 
     query: str
     hits: list[SearchHit]
+    include_snippet: bool = Field(
+        default=False,
+        description="True when the caller explicitly requested API-generated snippets.",
+    )
     next_cursor: str | None = None
 
 
