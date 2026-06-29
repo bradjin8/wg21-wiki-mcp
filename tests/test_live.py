@@ -207,7 +207,8 @@ def test_search_wiki(live_ctx):
         hit = res.hits[0]
         assert hit.title
         assert hit.url.startswith(live_ctx.config.base_url)
-        assert hit.snippet_warning == "mediawiki_generated_not_verbatim"
+        assert hit.snippet is None
+        assert res.include_snippet is False
 
 
 @skip_no_creds

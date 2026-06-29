@@ -41,6 +41,10 @@ for the pre-1.0 API stability policy and deprecation timeline.
   timeout (`title_hash` only; no page titles in logs).
 
 ### Changed
+- `search_wiki`: new `include_snippet` parameter (default `False`); snippets are omitted
+  unless explicitly requested. `SearchHit.snippet_warning` removed; `SearchResults.include_snippet`
+  documents caller opt-in. Tool and server instructions strengthened to state snippets must
+  not be cited as verbatim wiki content.
 - `CODEOWNERS` and `CONTRIBUTING.md`: add `@wpak-ai` as co-maintainer on all owned paths.
 - `CONTRIBUTING.md`: document ruleset `wg21-wiki-mcp-protection` (replaces legacy branch-protection UI wording).
 

@@ -109,7 +109,7 @@ Read grant and is the recommended, revocable option.
 
 | Tool | Purpose |
 | --- | --- |
-| `search_wiki` | Full-text search; returns titles, API snippets (non-verbatim), and URLs. |
+| `search_wiki` | Full-text search; returns titles and URLs (optional API snippets via `include_snippet`). |
 | `get_page` | Verbatim wikitext for a page or section, with provenance; chunked if large. |
 | `list_pages` | Enumerate page titles in a namespace. |
 | `list_namespaces` | List content namespaces and their numeric ids. |

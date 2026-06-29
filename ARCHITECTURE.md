@@ -61,7 +61,8 @@ LLM to interpret. This was chosen after surveying the wiki's real formats across
 many meetings (agendas, room tables, and page roles vary widely by year).
 
 - Structured (safe): search results, `allpages`, namespaces, recent changes,
-  page links, revision metadata. Search snippets are flagged non-verbatim.
+  page links, revision metadata. Search snippets are omitted by default; when opted in via
+  `include_snippet`, they are API-generated excerpts, not verbatim page text.
 - Deterministic extraction (only when the exact signal is present): agenda
   `session-start`/`session-end` ISO slots; meeting-title detection
   (`^\d{4}-\d{2} .+$`). Each reports an extraction status and degrades to "not

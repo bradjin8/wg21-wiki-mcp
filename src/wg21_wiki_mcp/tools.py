@@ -249,6 +249,7 @@ def search_wiki(
     limit: int = 10,
     namespace: int | None = None,
     cursor: str | None = None,
+    include_snippet: bool = False,
 ) -> SearchResults:
     """Search the wiki's full text via CirrusSearch.
 
@@ -266,14 +267,14 @@ def search_wiki(
             size=item.get("size"),
             wordcount=item.get("wordcount"),
             timestamp=item.get("timestamp"),
-            snippet=item.get("snippet"),
+            snippet=item.get("snippet") if include_snippet else None,
             url=ctx.client.canonical_url(item["title"]),
         )
         for item in search
     ]
     next_offset = resp.get("continue", {}).get("sroffset")
     next_cursor = encode_cursor({"o": next_offset}) if next_offset is not None else None
-    return SearchResults(query=query, hits=hits, next_cursor=next_cursor)
+    return SearchResults(query=query, hits=hits, include_snippet=include_snippet, next_cursor=next_cursor)
 
 
 # --------------------------------------------------------------------------- #
