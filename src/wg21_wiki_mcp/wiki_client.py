@@ -43,12 +43,13 @@ class _RWLock:
         self._cond = threading.Condition(threading.Lock())
         self._readers = 0
         self._writer_depth = 0
+        self._writers_waiting = 0
         self._writer_tid: int | None = None
 
     @contextmanager
     def read(self) -> Iterator[None]:
         with self._cond:
-            while self._writer_depth > 0:
+            while self._writer_depth > 0 or self._writers_waiting > 0:
                 self._cond.wait()
             self._readers += 1
         try:
@@ -63,10 +64,17 @@ class _RWLock:
     def write(self) -> Iterator[None]:
         tid = threading.get_ident()
         with self._cond:
-            while self._readers > 0 or (self._writer_depth > 0 and self._writer_tid != tid):
-                self._cond.wait()
-            self._writer_depth += 1
-            self._writer_tid = tid
+            if self._writer_depth > 0 and self._writer_tid == tid:
+                self._writer_depth += 1
+            else:
+                self._writers_waiting += 1
+                try:
+                    while self._readers > 0 or (self._writer_depth > 0 and self._writer_tid != tid):
+                        self._cond.wait()
+                finally:
+                    self._writers_waiting -= 1
+                self._writer_depth += 1
+                self._writer_tid = tid
         try:
             yield
         finally:
@@ -74,7 +82,7 @@ class _RWLock:
                 self._writer_depth -= 1
                 if self._writer_depth == 0:
                     self._writer_tid = None
-                    self._cond.notify_all()
+                self._cond.notify_all()
 
 
 @dataclass
@@ -311,8 +319,10 @@ class WikiClient:
         """One locked API attempt. Returns (result, last_exc, relogin)."""
         relogin = False
         read_only = action == "query"
+        # Timed calls mutate site.requests["timeout"]; use the write lock only.
+        use_read_lock = read_only and deadline is None
 
-        if read_only:
+        if use_read_lock:
             with self._lock.read():
                 self._require_open()
                 site = self._site

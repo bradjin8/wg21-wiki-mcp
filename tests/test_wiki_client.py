@@ -126,10 +126,67 @@ def test_api_query_logs_in_when_not_authenticated(tmp_path, monkeypatch):
 
 
 def test_api_non_query_uses_write_lock(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
     client = wc.WikiClient(_config(tmp_path))
     _patch_sites(monkeypatch, client, [FakeSite(api_func=lambda _a, _p: {"ok": "mutate"})])
     client.login()
+
+    read_calls: list[int] = []
+    write_calls: list[int] = []
+    real_read = client._lock.read
+    real_write = client._lock.write
+
+    @contextmanager
+    def tracked_read():
+        read_calls.append(1)
+        with real_read():
+            yield
+
+    @contextmanager
+    def tracked_write():
+        write_calls.append(1)
+        with real_write():
+            yield
+
+    monkeypatch.setattr(client._lock, "read", tracked_read)
+    monkeypatch.setattr(client._lock, "write", tracked_write)
+
     assert client.api("edit") == {"ok": "mutate"}
+    assert write_calls == [1]
+    assert read_calls == []
+
+
+def test_api_timed_query_uses_write_lock(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    client = wc.WikiClient(_config(tmp_path))
+    _patch_sites(monkeypatch, client, [FakeSite(api_func=lambda _a, _p: {"ok": 1})])
+    client.login()
+
+    read_calls: list[int] = []
+    write_calls: list[int] = []
+    real_read = client._lock.read
+    real_write = client._lock.write
+
+    @contextmanager
+    def tracked_read():
+        read_calls.append(1)
+        with real_read():
+            yield
+
+    @contextmanager
+    def tracked_write():
+        write_calls.append(1)
+        with real_write():
+            yield
+
+    monkeypatch.setattr(client._lock, "read", tracked_read)
+    monkeypatch.setattr(client._lock, "write", tracked_write)
+
+    assert client.api("query", timeout=0.5) == {"ok": 1}
+    assert write_calls == [1]
+    assert read_calls == []
 
 
 def test_relogin_on_readapidenied(tmp_path, monkeypatch):
@@ -173,6 +230,45 @@ def test_concurrent_query_api_calls_do_not_serialize(tmp_path, monkeypatch):
             assert fut.result(timeout=5) == {"ok": 1}
     elapsed = time.monotonic() - t0
     assert elapsed < api_delay * 1.75
+
+
+def test_rwlock_blocks_new_readers_while_writer_waits():
+    """Writer-preferring: pending writers prevent new readers from entering."""
+    lock = wc._RWLock()
+    release_first_read = threading.Event()
+    writer_waiting = threading.Event()
+    new_read_blocked = threading.Event()
+
+    def hold_first_read():
+        with lock.read():
+            release_first_read.wait(timeout=5)
+
+    t_read = threading.Thread(target=hold_first_read)
+    t_read.start()
+    time.sleep(0.05)
+
+    def queue_writer():
+        with lock.write():
+            writer_waiting.set()
+
+    t_write = threading.Thread(target=queue_writer)
+    t_write.start()
+    time.sleep(0.05)  # writer is waiting; _writers_waiting > 0
+
+    def probe_read():
+        with lock.read():
+            new_read_blocked.set()  # should not reach quickly
+
+    t_probe = threading.Thread(target=probe_read)
+    t_probe.start()
+    t_probe.join(timeout=0.1)
+    assert not new_read_blocked.is_set()
+
+    release_first_read.set()
+    t_read.join(timeout=5)
+    t_write.join(timeout=5)
+    t_probe.join(timeout=5)
+    assert writer_waiting.is_set()
 
 
 def test_api_sleep_releases_lock_for_concurrent_calls(tmp_path, monkeypatch):
