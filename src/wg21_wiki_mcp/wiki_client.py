@@ -36,6 +36,47 @@ _MAX_TITLES_PER_BATCH = 50  # safe limit for accounts without apihighlimits
 _UNSET_TIMEOUT = object()
 
 
+class _RWLock:
+    """Readers-writer lock with a reentrant writer (same thread may nest writes)."""
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition(threading.Lock())
+        self._readers = 0
+        self._writer_depth = 0
+        self._writer_tid: int | None = None
+
+    @contextmanager
+    def read(self) -> Iterator[None]:
+        with self._cond:
+            while self._writer_depth > 0:
+                self._cond.wait()
+            self._readers += 1
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._readers -= 1
+                if self._readers == 0:
+                    self._cond.notify_all()
+
+    @contextmanager
+    def write(self) -> Iterator[None]:
+        tid = threading.get_ident()
+        with self._cond:
+            while self._readers > 0 or (self._writer_depth > 0 and self._writer_tid != tid):
+                self._cond.wait()
+            self._writer_depth += 1
+            self._writer_tid = tid
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._writer_depth -= 1
+                if self._writer_depth == 0:
+                    self._writer_tid = None
+                    self._cond.notify_all()
+
+
 @dataclass
 class FetchedPage:
     """Result of fetching one page by its originally requested title."""
@@ -53,9 +94,9 @@ class FetchedPage:
 class WikiClient:
     """Thread-safe-ish authenticated MediaWiki client.
 
-    A single shared session is used; ``api()`` serializes network calls with a
-    lock so concurrent callers (the bounded fetch pool) cannot corrupt the
-    underlying requests session or trigger overlapping re-logins.
+    A single shared session is used. Read-only ``query`` API calls may run
+    concurrently under a shared reader lock; login, re-login, and other
+    mutations take an exclusive writer lock so the session cannot be corrupted.
     """
 
     def __init__(self, config: Config) -> None:
@@ -66,7 +107,7 @@ class WikiClient:
         self._scheme = parsed.scheme or "https"
         self._site: mwclient.Site | None = None
         self._active: Credentials | None = None
-        self._lock = threading.RLock()
+        self._lock = _RWLock()
         self._closed = False
 
     def _require_open(self) -> None:
@@ -92,27 +133,31 @@ class WikiClient:
             AuthError: if no configured credential path can log in.
             RuntimeError: if the client has been closed.
         """
-        with self._lock:
+        with self._lock.write():
             self._require_open()
-            timeout_remaining(deadline, on_exceeded=API_TIMEOUT_MSG)
-            path_failures: list[str] = []
-            for cred in self._config.ordered_credentials:
-                timeout_remaining(deadline, on_exceeded=API_TIMEOUT_MSG)
-                try:
-                    self._login_with(cred, deadline=deadline)
-                    self._active = cred
-                    return
-                except FetchError:
-                    raise
-                except Exception as exc:  # noqa: BLE001 - record and try next path
-                    path_failures.append(auth_path_failure_label(cred.label, exc))
-            raise AuthError(summarize_auth_failures(path_failures))
+            self._login_locked(deadline=deadline)
 
-    def _relogin(self, *, deadline: float | None = None) -> None:
-        """Re-run only the pinned credential path (no re-probing)."""
+    def _login_locked(self, *, deadline: float | None = None) -> None:
+        """Authenticate; caller must hold the write lock."""
+        timeout_remaining(deadline, on_exceeded=API_TIMEOUT_MSG)
+        path_failures: list[str] = []
+        for cred in self._config.ordered_credentials:
+            timeout_remaining(deadline, on_exceeded=API_TIMEOUT_MSG)
+            try:
+                self._login_with(cred, deadline=deadline)
+                self._active = cred
+                return
+            except FetchError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - record and try next path
+                path_failures.append(auth_path_failure_label(cred.label, exc))
+        raise AuthError(summarize_auth_failures(path_failures))
+
+    def _relogin_locked(self, *, deadline: float | None = None) -> None:
+        """Re-run only the pinned credential path; caller must hold the write lock."""
         timeout_remaining(deadline, on_exceeded=API_TIMEOUT_MSG)
         if self._active is None:
-            self.login(deadline=deadline)
+            self._login_locked(deadline=deadline)
             return
         self._login_with(self._active, deadline=deadline)
 
@@ -245,6 +290,63 @@ class WikiClient:
         return bool(info.get("name")) and "anon" not in info
 
     # -- API call wrapper ---------------------------------------------------
+    def _api_call_locked(
+        self,
+        site: mwclient.Site,
+        action: str,
+        deadline: float | None,
+        params: dict[str, object],
+    ) -> dict:
+        """Invoke ``site.api``; caller must hold read or write lock."""
+        with self._site_request_timeout(site, deadline):
+            return site.api(action, **params)
+
+    def _api_attempt(
+        self,
+        action: str,
+        *,
+        deadline: float | None,
+        params: dict[str, object],
+    ) -> tuple[dict | None, Exception | None, bool]:
+        """One locked API attempt. Returns (result, last_exc, relogin)."""
+        relogin = False
+        read_only = action == "query"
+
+        if read_only:
+            with self._lock.read():
+                self._require_open()
+                site = self._site
+                if site is not None:
+                    try:
+                        return self._api_call_locked(site, action, deadline, params), None, False
+                    except APIError as exc:
+                        last_exc = exc
+                        if exc.code in _AUTH_ERROR_CODES:
+                            relogin = True
+                        elif exc.code not in _BACKOFF_CODES:
+                            raise
+                    except (MwClientError, ConnectionError, OSError) as exc:
+                        last_exc = exc
+                    return None, last_exc, relogin
+
+        with self._lock.write():
+            self._require_open()
+            if self._site is None:
+                self._login_locked(deadline=deadline)
+            assert self._site is not None
+            try:
+                return self._api_call_locked(self._site, action, deadline, params), None, False
+            except APIError as exc:
+                last_exc = exc
+                if exc.code in _AUTH_ERROR_CODES:
+                    relogin = True
+                elif exc.code not in _BACKOFF_CODES:
+                    raise
+            except (MwClientError, ConnectionError, OSError) as exc:
+                last_exc = exc
+
+        return None, last_exc, relogin
+
     def api(self, action: str, *, timeout: float | None = None, **params: object) -> dict:
         """Call the Action API with retry + automatic re-login on session loss.
 
@@ -256,23 +358,9 @@ class WikiClient:
         last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES):
             self._timeout_remaining(deadline)
-            relogin = False
-            with self._lock:
-                self._require_open()
-                if self._site is None:
-                    self.login(deadline=deadline)
-                assert self._site is not None  # login() sets the site or raises
-                with self._site_request_timeout(self._site, deadline):
-                    try:
-                        return self._site.api(action, **params)
-                    except APIError as exc:
-                        last_exc = exc
-                        if exc.code in _AUTH_ERROR_CODES:
-                            relogin = True
-                        elif exc.code not in _BACKOFF_CODES:
-                            raise
-                    except (MwClientError, ConnectionError, OSError) as exc:
-                        last_exc = exc
+            result, last_exc, relogin = self._api_attempt(action, deadline=deadline, params=params)
+            if result is not None:
+                return result
             sleep_s = min(2**attempt, 30)
             if deadline is not None:
                 remaining = self._timeout_remaining(deadline)
@@ -281,9 +369,9 @@ class WikiClient:
             time.sleep(sleep_s)
             if relogin:
                 self._timeout_remaining(deadline)
-                with self._lock:
+                with self._lock.write():
                     self._require_open()
-                    self._relogin(deadline=deadline)
+                    self._relogin_locked(deadline=deadline)
         if isinstance(last_exc, APIError) and last_exc.code in _AUTH_ERROR_CODES:
             raise AuthError(f"Session could not be re-established after {_MAX_RETRIES} attempts.") from last_exc
         raise FetchError(f"API call '{action}' failed after {_MAX_RETRIES} retries.") from last_exc
@@ -460,7 +548,7 @@ class WikiClient:
         """Close the underlying HTTP session and release the site handle."""
         if self._closed:
             return
-        with self._lock:
+        with self._lock.write():
             try:
                 if self._site is not None:
                     self._site.connection.close()

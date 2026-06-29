@@ -117,6 +117,21 @@ def test_all_paths_fail_raises(tmp_path, monkeypatch):
         client.login()
 
 
+def test_api_query_logs_in_when_not_authenticated(tmp_path, monkeypatch):
+    client = wc.WikiClient(_config(tmp_path))
+    _patch_sites(monkeypatch, client, [FakeSite(api_func=lambda _a, _p: {"ok": 1})])
+    assert client.active_label is None
+    assert client.api("query") == {"ok": 1}
+    assert client.active_label == "bot"
+
+
+def test_api_non_query_uses_write_lock(tmp_path, monkeypatch):
+    client = wc.WikiClient(_config(tmp_path))
+    _patch_sites(monkeypatch, client, [FakeSite(api_func=lambda _a, _p: {"ok": "mutate"})])
+    client.login()
+    assert client.api("edit") == {"ok": "mutate"}
+
+
 def test_relogin_on_readapidenied(tmp_path, monkeypatch):
     calls = {"n": 0}
 
@@ -133,6 +148,31 @@ def test_relogin_on_readapidenied(tmp_path, monkeypatch):
     result = client.api("query")
     assert result == {"ok": "after-relogin"}
     assert calls["n"] == 2  # failed once, retried after re-login
+
+
+def test_concurrent_query_api_calls_do_not_serialize(tmp_path, monkeypatch):
+    """Two concurrent query api() calls overlap instead of serializing on the lock."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    api_delay = 0.2
+    entered = threading.Barrier(2, timeout=5)
+
+    def api_func(action, params):
+        entered.wait()
+        time.sleep(api_delay)
+        return {"ok": 1}
+
+    client = wc.WikiClient(_config(tmp_path))
+    _patch_sites(monkeypatch, client, [FakeSite(api_func=api_func)])
+    client.login()
+
+    t0 = time.monotonic()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(client.api, "query") for _ in range(2)]
+        for fut in futures:
+            assert fut.result(timeout=5) == {"ok": 1}
+    elapsed = time.monotonic() - t0
+    assert elapsed < api_delay * 1.75
 
 
 def test_api_sleep_releases_lock_for_concurrent_calls(tmp_path, monkeypatch):
@@ -282,13 +322,13 @@ def test_api_timeout_skips_relogin_when_budget_exhausted(tmp_path, monkeypatch):
     client = wc.WikiClient(_config(tmp_path))
     _patch_sites(monkeypatch, client, [site, FakeSite(api_func=api_func)])
 
-    real_relogin = client._relogin
+    real_relogin = client._relogin_locked
 
     def tracked_relogin(*, deadline=None):
         calls["relogin"] += 1
         return real_relogin(deadline=deadline)
 
-    monkeypatch.setattr(client, "_relogin", tracked_relogin)
+    monkeypatch.setattr(client, "_relogin_locked", tracked_relogin)
 
     base = time.monotonic()
     ticks = {"n": 0}
