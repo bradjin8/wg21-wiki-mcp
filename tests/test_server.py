@@ -100,7 +100,7 @@ def _fake_ctx(tmp_path) -> ServerContext:
     client = FakeWikiClient()
     client.pages["2026-06 Alpha"] = FakePage("home", 1)
     client.allpages = [{"title": "2026-06 Alpha", "ns": 0}]
-    client.search_results = [{"title": "Hit", "ns": 0}]
+    client.search_results = [{"title": "Hit", "ns": 0, "snippet": "<b>Hit</b>"}]
     config = make_config(tmp_path)
     cache = Cache(config.cache_dir)
     return ServerContext(
@@ -117,6 +117,8 @@ def test_tool_wrappers_delegate(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "get_context", lambda: ctx)
     try:
         assert server.search_wiki("q").hits[0].title == "Hit"
+        assert server.search_wiki("q").hits[0].snippet is None
+        assert server.search_wiki("q", include_snippet=True).hits[0].snippet is not None
         assert server.get_page("2026-06 Alpha").content == "home"
         assert server.list_pages(0).pages[0].title == "2026-06 Alpha"
         assert isinstance(server.list_namespaces(), list)

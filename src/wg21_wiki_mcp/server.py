@@ -96,18 +96,40 @@ mcp = FastMCP(
     instructions=(
         "Read-only access to the WG21 (ISO C++) committee wiki as a verifiable "
         "source of truth. Page content is returned verbatim with a clickable URL "
-        "and revision id; treat returned text as authoritative and search snippets "
-        "as non-authoritative excerpts. The server never composes meeting schedules "
-        "- use get_meeting_sessions to get the raw materials and compose them yourself."
+        "and revision id; treat returned text as authoritative. Search snippets are "
+        "API-generated excerpts (truncated, reformatted, with highlight markup) and "
+        "must not be cited as verbatim wiki content — use get_page for authoritative "
+        "text. The server never composes meeting schedules — use get_meeting_sessions "
+        "to get the raw materials and compose them yourself."
     ),
     lifespan=_lifespan,
 )
 
 
 @mcp.tool()
-def search_wiki(query: str, limit: int = 10, namespace: int | None = None, cursor: str | None = None) -> SearchResults:
-    """Full-text search the wiki. Returns titles, API snippets (non-verbatim), and URLs."""
-    return _wrap(tools.search_wiki, get_context(), query, limit=limit, namespace=namespace, cursor=cursor)
+def search_wiki(
+    query: str,
+    limit: int = 10,
+    namespace: int | None = None,
+    cursor: str | None = None,
+    include_snippet: bool = False,
+) -> SearchResults:
+    """Full-text search the wiki. Returns titles and URLs.
+
+    Snippets are API-generated excerpts (truncated, reformatted, with highlight
+    markup) and must not be cited as verbatim wiki content — use ``get_page`` for
+    authoritative text. Pass ``include_snippet=True`` only when you need those
+    excerpts for disambiguation; they are omitted by default.
+    """
+    return _wrap(
+        tools.search_wiki,
+        get_context(),
+        query,
+        limit=limit,
+        namespace=namespace,
+        cursor=cursor,
+        include_snippet=include_snippet,
+    )
 
 
 @mcp.tool()

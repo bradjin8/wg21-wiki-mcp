@@ -36,7 +36,7 @@ def _seed_stale_outlink_cache(ctx, title: str, links: list[str]) -> str:
 
 
 # --- search ---------------------------------------------------------------
-def test_search_returns_hits_and_snippet_warning(fake_client, make_ctx):
+def test_search_returns_hits_without_snippet_by_default(fake_client, make_ctx):
     fake_client.search_results = [
         {
             "title": "Topic A",
@@ -50,9 +50,24 @@ def test_search_returns_hits_and_snippet_warning(fake_client, make_ctx):
     ctx = make_ctx(fake_client)
     res = tools.search_wiki(ctx, "topic", limit=5)
     assert res.hits[0].title == "Topic A"
-    assert res.hits[0].snippet_warning == "mediawiki_generated_not_verbatim"
+    assert res.hits[0].snippet is None
+    assert res.include_snippet is False
     assert res.hits[0].url.endswith("title=Topic_A")
     assert res.next_cursor is None
+
+
+def test_search_include_snippet_returns_api_excerpt(fake_client, make_ctx):
+    fake_client.search_results = [
+        {
+            "title": "Topic A",
+            "ns": 0,
+            "snippet": "<b>A</b>",
+        },
+    ]
+    ctx = make_ctx(fake_client)
+    res = tools.search_wiki(ctx, "topic", limit=5, include_snippet=True)
+    assert res.hits[0].snippet == "<b>A</b>"
+    assert res.include_snippet is True
 
 
 def test_search_pagination_cursor(fake_client, make_ctx):
