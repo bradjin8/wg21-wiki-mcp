@@ -17,6 +17,10 @@ _DEFAULT_MAX_AGE_DAYS = 365
 _PYPI_URL = "https://pypi.org/pypi/mwclient/json"
 
 
+def _non_yanked_upload_times(files: list[dict]) -> list[str]:
+    return [f["upload_time"] for f in files if not f.get("yanked")]
+
+
 def latest_release_date() -> tuple[str, datetime]:
     """Return (version, upload_time) for the newest non-yanked mwclient release."""
     try:
@@ -25,12 +29,17 @@ def latest_release_date() -> tuple[str, datetime]:
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"could not fetch mwclient metadata from PyPI: {exc}") from exc
 
-    version = data["info"]["version"]
-    files = data["releases"].get(version) or []
-    if not files:
-        raise RuntimeError(f"mwclient {version} has no release files on PyPI")
+    releases: dict[str, list[dict]] = data.get("releases") or {}
+    candidates: list[tuple[str, str]] = []
+    for version, files in releases.items():
+        upload_times = _non_yanked_upload_times(files)
+        if upload_times:
+            candidates.append((version, max(upload_times)))
 
-    upload_time = max(f["upload_time"] for f in files if not f.get("yanked"))
+    if not candidates:
+        raise RuntimeError("mwclient has no non-yanked release files on PyPI")
+
+    version, upload_time = max(candidates, key=lambda item: item[1])
     released = datetime.fromisoformat(upload_time.replace("Z", "+00:00"))
     if released.tzinfo is None:
         released = released.replace(tzinfo=UTC)
