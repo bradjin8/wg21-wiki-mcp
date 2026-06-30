@@ -49,6 +49,9 @@ for the pre-1.0 API stability policy and deprecation timeline.
 - `CONTRIBUTING.md`: document ruleset `wg21-wiki-mcp-protection` (replaces legacy branch-protection UI wording).
 
 ### Fixed
+- `WikiClient.api()`: replace the exclusive session lock with a reader-writer lock so
+  concurrent read-only ``query`` calls are not serialized across network round-trips;
+  login, re-login, and close still take an exclusive writer lock.
 - `WikiClient.api()`: release the RLock before retry backoff sleep so concurrent
   tool invocations are not blocked for the full sleep duration.
 - `PageFetcher._resolve_network`: revalidation and batched network fetch no longer

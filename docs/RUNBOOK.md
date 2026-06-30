@@ -159,8 +159,9 @@ change returned wikitext.
   of blocking other tools indefinitely.
 - `WikiClient.api()` accepts an optional per-call timeout, applies it to the
   underlying mwclient HTTP request, and releases the client lock before retry
-  backoff sleep. Upstream requests still serialize on the lock; only the sleep
-  between retries runs concurrently with other tools.
+  backoff sleep. Read-only ``query`` calls share a reader lock and may run
+  concurrently; login, re-login, and non-``query`` actions take an exclusive
+  writer lock.
 
 **Expected latency:** See the "Meeting-time performance" table in
 [ARCHITECTURE.md](../ARCHITECTURE.md). Cache-warm repeats are typically sub-second;
