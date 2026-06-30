@@ -95,13 +95,15 @@ server mitigates stall amplification as follows:
 | Single-page tools (`get_page`, etc.) | cache hit: ~ms | cache hit: ~ms | Miss: one batched API call per title (≤50 titles/request). |
 | `get_meeting_overview` | home page + outlink index cached with TTL | same | Home fetch and outlink discovery share one **30s** composite wait (`DEFAULT_COMPOSITE_MAX_WAIT_S`). |
 | `get_meeting_sessions` | outlink index cached + page bundle | same | Outlink discovery is cached separately from page bodies; page fetch capped at **30s** total wait (`DEFAULT_COMPOSITE_MAX_WAIT_S`). |
-| `WikiClient.api()` | retries with lock released during backoff | same | Optional per-call `timeout=` bounds all retries; raises `FetchError` when exceeded. |
+| `WikiClient.api()` | read-only ``query`` calls may run concurrently (reader lock); retries release lock during backoff | same | Optional per-call `timeout=` bounds all retries; raises `FetchError` when exceeded. Login/re-login use an exclusive writer lock. |
 
 **Expected latency (order of magnitude, cache-cold, typical meeting with ~40 subpages):**
 
 - First `get_meeting_sessions` in an hour: 1–5 outlink API calls + 1 batched page fetch (often 2–8s on a healthy wiki; longer if the wiki is lagging).
 - Repeat within the same TTL window: 0 outlink calls + cache hits for unchanged pages (sub-second locally).
-- Concurrent tool calls during retry backoff: other callers proceed because the client lock is released before sleep.
+- Concurrent read-only ``query`` calls: multiple tools may share the session in
+  parallel under a reader lock. During retry backoff, other callers proceed
+  because the lock is released before sleep.
 
 Under sustained lag (`maxlag` / slow responses), per-call timeouts surface as `FETCH_ERROR` rather than blocking all tools indefinitely.
 
