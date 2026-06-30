@@ -143,6 +143,14 @@ invocation.
 - All messages are actionable and contain no wiki page content.
 - `McpError` instances (including `INVALID_PARAMS`) pass through `_wrap` unchanged.
 
+## Dependencies
+
+MediaWiki HTTP/API access is delegated to [`mwclient`](https://pypi.org/project/mwclient/)
+inside `wiki_client.py`. Supply-chain risk, evaluated alternatives, the
+replacement boundary, and succession triggers are documented in
+[docs/DEPENDENCY-RISK.md](docs/DEPENDENCY-RISK.md). CI runs a PyPI release-age
+check (`scripts/check_mwclient_release_age.py`) on every push/PR.
+
 ## Future work
 
 - Attachment/file (PDF) retrieval (currently wikitext pages only).

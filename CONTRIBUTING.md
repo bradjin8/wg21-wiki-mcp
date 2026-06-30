@@ -93,7 +93,8 @@ pytest tests/test_wiki_client.py tests/test_wiki_client_more.py tests/test_wiki_
 6. [`server.py`](src/wg21_wiki_mcp/server.py) - how tools are registered and run.
 
 [ARCHITECTURE.md](ARCHITECTURE.md) explains the design, the parse-vs-offload
-policy, and what may break.
+policy, and what may break. [docs/DEPENDENCY-RISK.md](docs/DEPENDENCY-RISK.md)
+covers third-party dependency risk (notably `mwclient`) and the succession plan.
 
 ## Pull requests
 
