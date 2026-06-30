@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_mwclient_release_age.py"
@@ -43,4 +43,4 @@ def test_latest_release_date_skips_fully_yanked_version(monkeypatch):
     version, released = latest_release_date()
 
     assert version == "0.11.0"
-    assert released == datetime(2024, 8, 12, 9, 8, 13, tzinfo=UTC)
+    assert released == datetime(2024, 8, 12, 9, 8, 13, tzinfo=timezone.utc)

@@ -11,7 +11,7 @@ import json
 import sys
 import urllib.error
 import urllib.request
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 _DEFAULT_MAX_AGE_DAYS = 365
 _PYPI_URL = "https://pypi.org/pypi/mwclient/json"
@@ -42,7 +42,7 @@ def latest_release_date() -> tuple[str, datetime]:
     version, upload_time = max(candidates, key=lambda item: item[1])
     released = datetime.fromisoformat(upload_time.replace("Z", "+00:00"))
     if released.tzinfo is None:
-        released = released.replace(tzinfo=UTC)
+        released = released.replace(tzinfo=timezone.utc)
     return version, released
 
 
@@ -58,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     version, released = latest_release_date()
-    now = datetime.now(UTC)
+    now = datetime.now(timezone.utc)
     age_days = (now - released).days
 
     print(f"mwclient {version} released {released.date().isoformat()} ({age_days} days ago)")
