@@ -236,8 +236,26 @@ def test_rwlock_blocks_new_readers_while_writer_waits():
     """Writer-preferring: pending writers prevent new readers from entering."""
     lock = wc._RWLock()
     release_first_read = threading.Event()
-    writer_waiting = threading.Event()
+    writer_acquired = threading.Event()
     new_read_blocked = threading.Event()
+
+    def wait_for_lock_state(
+        *,
+        readers: int | None = None,
+        writers_waiting: int | None = None,
+        timeout: float = 5.0,
+    ) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with lock._cond:
+                if readers is not None and lock._readers != readers:
+                    pass
+                elif writers_waiting is not None and lock._writers_waiting < writers_waiting:
+                    pass
+                else:
+                    return
+            time.sleep(0.001)
+        raise AssertionError("lock state not reached in time")
 
     def hold_first_read():
         with lock.read():
@@ -245,19 +263,19 @@ def test_rwlock_blocks_new_readers_while_writer_waits():
 
     t_read = threading.Thread(target=hold_first_read)
     t_read.start()
-    time.sleep(0.05)
+    wait_for_lock_state(readers=1)
 
     def queue_writer():
         with lock.write():
-            writer_waiting.set()
+            writer_acquired.set()
 
     t_write = threading.Thread(target=queue_writer)
     t_write.start()
-    time.sleep(0.05)  # writer is waiting; _writers_waiting > 0
+    wait_for_lock_state(readers=1, writers_waiting=1)
 
     def probe_read():
         with lock.read():
-            new_read_blocked.set()  # should not reach quickly
+            new_read_blocked.set()
 
     t_probe = threading.Thread(target=probe_read)
     t_probe.start()
@@ -268,7 +286,7 @@ def test_rwlock_blocks_new_readers_while_writer_waits():
     t_read.join(timeout=5)
     t_write.join(timeout=5)
     t_probe.join(timeout=5)
-    assert writer_waiting.is_set()
+    assert writer_acquired.is_set()
 
 
 def test_api_sleep_releases_lock_for_concurrent_calls(tmp_path, monkeypatch):
