@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import quote, urljoin, urlparse
 
 import mwclient
@@ -35,6 +36,18 @@ _BACKOFF_CODES = frozenset({"maxlag", "ratelimited"})
 _MAX_RETRIES = 6
 _MAX_TITLES_PER_BATCH = 50  # safe limit for accounts without apihighlimits
 _UNSET_TIMEOUT = object()
+
+
+def _saml_session_request(
+    method: Callable[..., requests.Response],
+    *args: Any,
+    **kwargs: Any,
+) -> requests.Response:
+    """Run one SAML HTTP hop; map ``requests`` failures to :class:`AuthError`."""
+    try:
+        return method(*args, **kwargs)
+    except requests.RequestException as exc:
+        raise AuthError(f"SAML SSO request failed: {type(exc).__name__}.") from exc
 
 
 class _RWLock:
@@ -265,10 +278,8 @@ class WikiClient:
 
         session = site.connection  # reuse mwclient's requests.Session so cookies persist
         start = f"{self._config.base_url}/index.php?title=Special:PluggableAuthLogin"
-        try:
-            resp = session.get(start, allow_redirects=True, timeout=self._http_timeout(deadline))
-        except requests.RequestException as exc:
-            raise AuthError(f"SAML SSO request failed: {type(exc).__name__}.") from exc
+
+        resp = _saml_session_request(session.get, start, allow_redirects=True, timeout=self._http_timeout(deadline))
         if not resp.ok:
             raise AuthError(f"SAML SSO entry point returned HTTP {resp.status_code}.")
 
@@ -290,7 +301,9 @@ class WikiClient:
         fields[user_field] = cred.username
         fields[pass_field] = cred.password
 
-        posted = session.post(action, data=fields, allow_redirects=True, timeout=self._http_timeout(deadline))
+        posted = _saml_session_request(
+            session.post, action, data=fields, allow_redirects=True, timeout=self._http_timeout(deadline)
+        )
         soup2 = BeautifulSoup(posted.text, "lxml")
         saml_form = next((f for f in soup2.find_all("form") if f.find("input", {"name": "SAMLResponse"})), None)
         if saml_form is None:
@@ -299,7 +312,9 @@ class WikiClient:
             return  # the client auto-followed the POST
         acs = urljoin(posted.url, str(saml_form.get("action")))
         payload = {str(i["name"]): str(i.get("value", "")) for i in saml_form.find_all("input") if i.get("name")}
-        acs_resp = session.post(acs, data=payload, allow_redirects=True, timeout=self._http_timeout(deadline))
+        acs_resp = _saml_session_request(
+            session.post, acs, data=payload, allow_redirects=True, timeout=self._http_timeout(deadline)
+        )
         if not acs_resp.ok:
             raise AuthError(f"SAML ACS endpoint rejected the response (HTTP {acs_resp.status_code}).")
 

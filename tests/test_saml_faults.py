@@ -154,6 +154,53 @@ def test_sso_get_timeout_propagates(tmp_path, monkeypatch):
     _assert_no_site(client)
 
 
+@responses.activate
+def test_idp_post_timeout_raises_auth_error(tmp_path, monkeypatch):
+    responses.add(
+        responses.GET,
+        _PLUGGABLE,
+        status=302,
+        headers={"Location": "https://idp.example/login?AuthState=abc123"},
+    )
+    responses.add(responses.GET, _IDP, body=_fixture("idp_login_form.html"), status=200)
+    client = wc.WikiClient(_user_config(tmp_path))
+    site = _saml_site(client)
+    cred = client._config.user
+    assert cred is not None
+
+    def _timeout_on_idp_post(url, *args, **kwargs):
+        raise requests.Timeout("connection timed out")
+
+    monkeypatch.setattr(site.connection, "post", _timeout_on_idp_post)
+    _assert_no_site(client)
+    with pytest.raises(AuthError, match="SAML SSO request failed: Timeout"):
+        client._saml_login(site, cred)
+    _assert_no_site(client)
+
+
+@responses.activate
+def test_acs_post_connection_error_raises_auth_error(tmp_path, monkeypatch):
+    _register_idp_through_saml_response()
+    client = wc.WikiClient(_user_config(tmp_path))
+    site = _saml_site(client)
+    cred = client._config.user
+    assert cred is not None
+    original_post = site.connection.post
+    post_calls = {"n": 0}
+
+    def _fail_acs_post(url, *args, **kwargs):
+        post_calls["n"] += 1
+        if post_calls["n"] == 1:
+            return original_post(url, *args, **kwargs)
+        raise requests.ConnectionError("connection reset")
+
+    monkeypatch.setattr(site.connection, "post", _fail_acs_post)
+    _assert_no_site(client)
+    with pytest.raises(AuthError, match="SAML SSO request failed: ConnectionError"):
+        client._saml_login(site, cred)
+    _assert_no_site(client)
+
+
 class _ClientloginFailSite:
     """Site stub: clientlogin API error, real requests session for SAML HTTP."""
 
