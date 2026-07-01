@@ -100,6 +100,13 @@ class TestSanitizeText:
         msg = "SAML SSO entry point returned HTTP error.; url=https://w.example; status=403"
         assert is_safe_auth_message(msg)
 
+    def test_clientlogin_wrapper_preserves_saml_mcp_message(self):
+        wrapped = (
+            "clientlogin unavailable; SAML SSO entry point returned HTTP error.; url=https://w.example; status=403"
+        )
+        assert is_safe_auth_message(wrapped)
+        assert auth_error_mcp_message(AuthErrorModel(wrapped)) == "SAML SSO entry point returned HTTP error."
+
     def test_saml_request_failed_diagnostic_is_safe(self):
         msg = "SAML SSO request failed: Timeout.; url=https://w.example; status=504"
         assert is_safe_auth_message(msg)

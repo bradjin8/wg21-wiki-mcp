@@ -64,10 +64,13 @@ _SAML_REQUEST_FAILED_HEAD_RE = re.compile(r"^SAML SSO request failed: \w+\.$")
 _SAFE_FIELDS_SUFFIX_RE = re.compile(r"^fields=\[(?:'[\w.-]+'(?:, '[\w.-]+')*)?\]$")
 
 _SESSION_REAUTH_MESSAGE_RE = re.compile(r"^Session could not be re-established after \d+ attempts\.$")
+_CLIENTLOGIN_WRAPPER_PREFIX = "clientlogin unavailable; "
 
 
 def _split_saml_diagnostic(message: str) -> tuple[str, str] | None:
     """Split a SAML diagnostic into static head and optional validated suffix."""
+    if message.startswith(_CLIENTLOGIN_WRAPPER_PREFIX):
+        message = message[len(_CLIENTLOGIN_WRAPPER_PREFIX) :]
     if message in _KNOWN_SAFE_AUTH_MESSAGES or message in _SAML_STATIC_HEADS:
         return message, ""
     for head in _SAML_STATIC_HEADS:
