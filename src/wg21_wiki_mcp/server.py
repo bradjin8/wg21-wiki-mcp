@@ -69,6 +69,14 @@ def _prime_context(cfg: Config) -> None:
             _state["ctx"] = ServerContext.create(cfg)
 
 
+def _drop_primed_context() -> None:
+    """Close and remove a startup-primed context after a failed ``mcp.run()``."""
+    with _state_lock:
+        ctx = _state.pop("ctx", None)
+    if ctx is not None:
+        ctx.close()
+
+
 def get_context() -> ServerContext:
     """Return the shared server context, building it from the env on first use."""
     with _state_lock:
@@ -233,18 +241,22 @@ def main() -> None:
     """Console-script entry point: run the MCP server (stdio by default)."""
     cfg = Config.from_env()
     _prime_context(cfg)
-    if cfg.transport == DEFAULT_TRANSPORT:
-        mcp.run()
-        return
-    if cfg.http_host != DEFAULT_HTTP_HOST:
-        get_logger("server").warning(
-            "HTTP listener binding to %s (not %s); shared ServerContext is exposed beyond localhost",
-            cfg.http_host,
-            DEFAULT_HTTP_HOST,
-        )
-    mcp.settings.host = cfg.http_host
-    mcp.settings.port = cfg.http_port
-    mcp.run(transport=cfg.transport)
+    try:
+        if cfg.transport == DEFAULT_TRANSPORT:
+            mcp.run()
+            return
+        if cfg.http_host != DEFAULT_HTTP_HOST:
+            get_logger("server").warning(
+                "HTTP listener binding to %s (not %s); shared ServerContext is exposed beyond localhost",
+                cfg.http_host,
+                DEFAULT_HTTP_HOST,
+            )
+        mcp.settings.host = cfg.http_host
+        mcp.settings.port = cfg.http_port
+        mcp.run(transport=cfg.transport)
+    except BaseException:
+        _drop_primed_context()
+        raise
 
 
 if __name__ == "__main__":

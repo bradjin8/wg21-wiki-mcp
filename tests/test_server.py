@@ -205,15 +205,38 @@ def test_main_selects_sse_transport(monkeypatch):
         captured["mount_path"] = mount_path
 
     monkeypatch.setattr(server.mcp, "run", _run)
+    original_host = server.mcp.settings.host
+    original_port = server.mcp.settings.port
     try:
         server.main()
         assert captured["transport"] == "sse"
         assert server.mcp.settings.port == 8765
     finally:
+        server.mcp.settings.host = original_host
+        server.mcp.settings.port = original_port
         with server._state_lock:
             ctx = server._state.pop("ctx", None)
         if ctx is not None:
             ctx.close()
+
+
+def test_main_clears_primed_context_on_run_failure(monkeypatch, tmp_path):
+    with server._state_lock:
+        ctx = server._state.pop("ctx", None)
+    if ctx is not None:
+        ctx.close()
+    monkeypatch.setenv("WIKI_BOT_USERNAME", "Acct@bot")
+    monkeypatch.setenv("WIKI_BOT_PASSWORD", "secret")
+    monkeypatch.setenv("ISOCPP_WIKI_CACHE_DIR", str(tmp_path / "c"))
+
+    def _fail(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("startup failed")
+
+    monkeypatch.setattr(server.mcp, "run", _fail)
+    with pytest.raises(RuntimeError, match="startup failed"):
+        server.main()
+    with server._state_lock:
+        assert "ctx" not in server._state
 
 
 def test_main_primes_context_without_re_parsing_env(monkeypatch, tmp_path):
