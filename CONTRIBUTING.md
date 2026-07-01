@@ -47,7 +47,9 @@ pytest -m live --no-cov
 ```
 
 Live tests auto-skip when credentials are absent and must never print or store
-wiki content. In CI, the canary tier (`pytest -m canary --no-cov`) runs bot login
+wiki content. They also skip (with a logged HTTP status) when the wiki edge
+returns **403**, **429**, or **503** — typical Cloudflare/WAF blocks of CI
+runner IPs, not credential faults. In CI, the canary tier (`pytest -m canary --no-cov`) runs bot login
 plus one read-only tool call; the full live tier runs `pytest -m live --no-cov`.
 Both jobs read credentials from the `live-wiki` GitHub environment.
 
