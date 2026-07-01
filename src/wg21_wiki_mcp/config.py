@@ -11,10 +11,12 @@ import os
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
+from typing import Literal, cast
 
 # ConfigError re-exported from errors.py; import here so callers that do
 # ``from wg21_wiki_mcp.config import ConfigError`` continue to work.
 from .errors import ConfigError
+from .log import get_logger
 
 __all__ = [
     # Configuration classes
@@ -22,8 +24,13 @@ __all__ = [
     "Credentials",
     # Constants
     "DEFAULT_CACHE_DIR_NAME",
+    "DEFAULT_HTTP_HOST",
+    "DEFAULT_HTTP_PORT",
+    "DEFAULT_SAML_TIMEOUT_S",
     "DEFAULT_TTL_MEETING_S",
     "DEFAULT_TTL_NORMAL_S",
+    "DEFAULT_TRANSPORT",
+    "VALID_TRANSPORTS",
     "WIKI_BASE_URL",
     # Error type (re-exported for backward compatibility)
     "ConfigError",
@@ -43,6 +50,12 @@ DEFAULT_TTL_NORMAL_S = 7 * 24 * 60 * 60  # one week
 DEFAULT_TTL_MEETING_S = 60 * 60  # one hour
 DEFAULT_CACHE_DIR_NAME = ".isocpp.wiki"
 DEFAULT_SAML_TIMEOUT_S = 30
+TransportName = Literal["stdio", "sse", "streamable-http"]
+DEFAULT_TRANSPORT: TransportName = "stdio"
+DEFAULT_HTTP_HOST = "127.0.0.1"
+DEFAULT_HTTP_PORT = 8000
+VALID_TRANSPORTS = frozenset({"stdio", "sse", "streamable-http"})
+_log = get_logger("config")
 
 
 def _env_first(*names: str) -> str:
@@ -103,6 +116,9 @@ class Config:
     saml_username_field: str | None = None
     saml_password_field: str | None = None
     saml_timeout_s: int = DEFAULT_SAML_TIMEOUT_S
+    transport: TransportName = DEFAULT_TRANSPORT
+    http_host: str = DEFAULT_HTTP_HOST
+    http_port: int = DEFAULT_HTTP_PORT
 
     @classmethod
     def from_env(cls, *, load_env_file: bool = True) -> Config:
@@ -148,6 +164,9 @@ class Config:
             saml_username_field=saml_user_field,
             saml_password_field=saml_pass_field,
             saml_timeout_s=_env_int("WIKI_SAML_TIMEOUT_S", DEFAULT_SAML_TIMEOUT_S),
+            transport=_parse_transport(_env_first("WG21_TRANSPORT")),
+            http_host=_env_first("WG21_HTTP_HOST") or DEFAULT_HTTP_HOST,
+            http_port=_env_port("WG21_HTTP_PORT", DEFAULT_HTTP_PORT),
         )
 
     @property
@@ -161,12 +180,47 @@ class Config:
         return [c for c in (self.bot, self.user) if c is not None]
 
 
+def _env_int_raw(name: str) -> int | None:
+    """Parse an integer environment variable, or return ``None`` if unset/invalid."""
+    raw = os.environ.get(name)
+    if not raw or not raw.strip():
+        return None
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return None
+
+
 def _env_int(name: str, default: int) -> int:
+    value = _env_int_raw(name)
+    if value is None:
+        return default
+    return value if value > 0 else default
+
+
+def _env_port(name: str, default: int) -> int:
     raw = os.environ.get(name)
     if not raw or not raw.strip():
         return default
-    try:
-        value = int(raw.strip())
-    except ValueError:
+    value = _env_int_raw(name)
+    if value is None:
+        _log.warning("Invalid %s=%r: using default %d", name, raw.strip(), default)
         return default
-    return value if value > 0 else default
+    if not (1 <= value <= 65535):
+        _log.warning(
+            "Invalid %s=%r: port must be 1-65535; using default %d",
+            name,
+            raw.strip(),
+            default,
+        )
+        return default
+    return value
+
+
+def _parse_transport(raw: str) -> TransportName:
+    """Return a validated MCP transport name from ``WG21_TRANSPORT``."""
+    value = (raw or DEFAULT_TRANSPORT).strip().lower()
+    if value not in VALID_TRANSPORTS:
+        allowed = ", ".join(sorted(VALID_TRANSPORTS))
+        raise ConfigError(f"Invalid WG21_TRANSPORT={raw!r}: must be one of {allowed}.")
+    return cast(TransportName, value)
