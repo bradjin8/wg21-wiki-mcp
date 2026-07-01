@@ -10,7 +10,14 @@ for the pre-1.0 API stability policy and deprecation timeline.
 
 ## [Unreleased]
 
+### Changed
+- Tighten `mwclient` runtime pin to `>=0.11.0,<0.12` so unexpected minor/major
+  releases cannot land silently via Dependabot.
+
 ### Added
+- `docs/DEPENDENCY-RISK.md`: mwclient upstream assessment, alternatives evaluation,
+  abstraction boundary, and succession plan; CI PyPI release-age check
+  (`scripts/check_mwclient_release_age.py`, `dependency health` job).
 - `docs/API.md`: rendered MCP tool reference (parameters, return types, programmatic access).
 - `docs/FIRST_PYPI_PUBLISH.md`: one-time Trusted Publisher checklist for the first PyPI release.
 - Meeting-time **latency gate** CI step on `ubuntu-latest` / Python 3.12 (`pytest -m latency_gate`).

@@ -22,7 +22,7 @@ classifiers = [
 ]
 dependencies = [
     "mcp>=1.27,<2",
-    "mwclient>=0.11.0",
+    "mwclient>=0.11.0,<0.12",
     "requests>=2.31",
     "beautifulsoup4>=4.12",
     "lxml>=5.0",
