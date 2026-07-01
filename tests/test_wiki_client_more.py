@@ -117,9 +117,11 @@ def test_api_exhausts_retries(tmp_path, monkeypatch):
 
 # --- SAML headless login --------------------------------------------------
 class _Resp:
-    def __init__(self, text, url):
+    def __init__(self, text, url, *, status_code: int = 200):
         self.text = text
         self.url = url
+        self.status_code = status_code
+        self.ok = status_code < 400
 
 
 class _SamlConn:
