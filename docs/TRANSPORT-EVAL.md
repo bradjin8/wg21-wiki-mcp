@@ -135,7 +135,7 @@ deployment:
 
 **Depends on:** #45 (transport evaluation + prototype)
 
-#### Problem
+### Problem
 
 The opt-in `WG21_TRANSPORT=sse|streamable-http` prototype binds a local HTTP
 listener with no MCP-layer authentication, no TLS, and no rate limiting. A
@@ -143,7 +143,7 @@ shared `ServerContext` serves all connected clients with one wiki credential
 pair. This is adequate for localhost experiments but not for team servers,
 CI gateways, or WAN exposure.
 
-#### Acceptance Criteria
+### Acceptance Criteria
 
 - [ ] MCP-layer authentication (Bearer token or OAuth) required when
       `WG21_TRANSPORT` is not `stdio`; document token issuance for operators
@@ -155,7 +155,7 @@ CI gateways, or WAN exposure.
       mock verifier
 - [ ] Default remains `stdio`; HTTP modes stay opt-in
 
-#### Implementation Notes
+### Implementation Notes
 
 - Prefer `streamable-http` as the primary hardened transport; keep `sse` if
   client compatibility still requires it
