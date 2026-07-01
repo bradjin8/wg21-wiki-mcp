@@ -42,6 +42,7 @@ WIKI_BASE_URL = "https://wiki.isocpp.org"
 DEFAULT_TTL_NORMAL_S = 7 * 24 * 60 * 60  # one week
 DEFAULT_TTL_MEETING_S = 60 * 60  # one hour
 DEFAULT_CACHE_DIR_NAME = ".isocpp.wiki"
+DEFAULT_SAML_TIMEOUT_S = 30
 
 
 def _env_first(*names: str) -> str:
@@ -99,6 +100,9 @@ class Config:
     ttl_meeting_s: int = DEFAULT_TTL_MEETING_S
     meeting_window_overrides: list[tuple[date, date]] = field(default_factory=list)
     user_agent: str = "wg21-wiki-mcp/0.1 (+https://github.com/cppalliance/wg21-wiki-mcp)"
+    saml_username_field: str | None = None
+    saml_password_field: str | None = None
+    saml_timeout_s: int = DEFAULT_SAML_TIMEOUT_S
 
     @classmethod
     def from_env(cls, *, load_env_file: bool = True) -> Config:
@@ -130,6 +134,9 @@ class Config:
         cache_dir_raw = _env_first("ISOCPP_WIKI_CACHE_DIR")
         cache_dir = Path(cache_dir_raw) if cache_dir_raw else Path.home() / DEFAULT_CACHE_DIR_NAME
 
+        saml_user_field = _env_first("WIKI_SAML_USERNAME_FIELD") or None
+        saml_pass_field = _env_first("WIKI_SAML_PASSWORD_FIELD") or None
+
         return cls(
             base_url=WIKI_BASE_URL,
             bot=bot,
@@ -138,6 +145,9 @@ class Config:
             ttl_normal_s=_env_int("ISOCPP_WIKI_TTL_NORMAL", DEFAULT_TTL_NORMAL_S),
             ttl_meeting_s=_env_int("ISOCPP_WIKI_TTL_MEETING", DEFAULT_TTL_MEETING_S),
             meeting_window_overrides=_parse_meeting_windows(_env_first("ISOCPP_WIKI_MEETING_WINDOWS")),
+            saml_username_field=saml_user_field,
+            saml_password_field=saml_pass_field,
+            saml_timeout_s=_env_int("WIKI_SAML_TIMEOUT_S", DEFAULT_SAML_TIMEOUT_S),
         )
 
     @property

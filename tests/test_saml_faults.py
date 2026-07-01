@@ -79,7 +79,7 @@ def test_sso_entry_http_500_raises_auth_error(tmp_path):
     cred = client._config.user
     assert cred is not None
     _assert_no_site(client)
-    with pytest.raises(AuthError, match=r"HTTP 500"):
+    with pytest.raises(AuthError, match=r"SAML SSO entry point returned HTTP error"):
         client._saml_login(site, cred)
     _assert_no_site(client)
 
@@ -132,7 +132,7 @@ def test_acs_post_http_403_raises_auth_error(tmp_path):
     cred = client._config.user
     assert cred is not None
     _assert_no_site(client)
-    with pytest.raises(AuthError, match=r"ACS endpoint rejected.*HTTP 403"):
+    with pytest.raises(AuthError, match=r"ACS endpoint rejected.*status=403"):
         client._saml_login(site, cred)
     _assert_no_site(client)
 

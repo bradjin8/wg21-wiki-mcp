@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
+from urllib.parse import parse_qs
 
 import mwclient
 import pytest
@@ -209,3 +211,115 @@ def test_clientlogin_success_skips_saml(tmp_path, monkeypatch):
     client.login()
     assert client.active_label == "user"
     assert len(responses.calls) == 0
+
+
+def _config_with_saml_fields(tmp_path: Path, *, username_field: str, password_field: str) -> Config:
+    return Config(
+        base_url=_BASE,
+        bot=None,
+        user=Credentials("user", "Acct", "test-password-xyz"),
+        cache_dir=tmp_path / "c",
+        saml_username_field=username_field,
+        saml_password_field=password_field,
+    )
+
+
+@responses.activate
+def test_saml_configurable_field_overrides(tmp_path, monkeypatch):
+    """Explicit WIKI_SAML_* field names override DOM heuristics (decoy text field)."""
+    posted_fields: dict[str, str] = {}
+
+    def _capture_idp_post(request):
+        body = request.body
+        if isinstance(body, bytes):
+            body = body.decode()
+        posted_fields.update({k: v[0] for k, v in parse_qs(body).items()})
+        return (200, {}, _fixture("saml_post_form.html"))
+
+    responses.add(
+        responses.GET, _PLUGGABLE, status=302, headers={"Location": "https://idp.example/login?AuthState=abc123"}
+    )
+    responses.add(responses.GET, _IDP, body=_fixture("idp_decoy_text_field.html"), status=200)
+    responses.add_callback(responses.POST, _IDP, callback=_capture_idp_post)
+    responses.add(responses.POST, _ACS, status=302, headers={"Location": f"{_BASE}/"})
+    responses.add(responses.GET, re.compile(r"https://w\.example/?$"), status=200, body="ok")
+
+    client = wc.WikiClient(_config_with_saml_fields(tmp_path, username_field="login_id", password_field="credential"))
+    _user_login_via_saml(client, monkeypatch)
+    assert posted_fields.get("login_id") == "Acct"
+    assert posted_fields.get("credential") == "test-password-xyz"
+    assert "display_name" not in posted_fields or posted_fields.get("display_name") != "Acct"
+
+
+@responses.activate
+def test_saml_retries_transient_sso_5xx(tmp_path):
+    """SSO entry 5xx is retried once before raising AuthError."""
+    attempts = {"n": 0}
+
+    def _always_500(_request):
+        attempts["n"] += 1
+        return (500, {}, "Internal Server Error")
+
+    responses.add_callback(responses.GET, _PLUGGABLE, callback=_always_500)
+    client = wc.WikiClient(_user_config(tmp_path))
+    site = _saml_site(client)
+    cred = client._config.user
+    assert cred is not None
+    with pytest.raises(AuthError, match="SAML SSO entry point returned HTTP error"):
+        client._saml_login(site, cred)
+    assert attempts["n"] == wc._SAML_MAX_RETRIES
+
+
+@responses.activate
+def test_saml_sso_5xx_recovers_on_retry(tmp_path, monkeypatch):
+    """A transient 5xx on the SSO GET succeeds after one retry."""
+    attempts = {"n": 0}
+
+    def _flaky_sso(_request):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            return (500, {}, "Internal Server Error")
+        return (302, {"Location": "https://idp.example/login?AuthState=abc123"}, "")
+
+    responses.add_callback(responses.GET, _PLUGGABLE, callback=_flaky_sso)
+    _register_saml_happy_path_after_idp()
+
+    client = wc.WikiClient(_user_config(tmp_path))
+    _user_login_via_saml(client, monkeypatch)
+    assert attempts["n"] == 2
+    assert client.active_label == "user"
+
+
+def _register_saml_happy_path_after_idp() -> None:
+    responses.add(responses.GET, _IDP, body=_fixture("idp_login_form.html"), status=200)
+    responses.add(responses.POST, _IDP, body=_fixture("saml_post_form.html"), status=200)
+    responses.add(responses.POST, _ACS, status=302, headers={"Location": f"{_BASE}/"})
+    responses.add(responses.GET, re.compile(r"https://w\.example/?$"), status=200, body="ok")
+
+
+@responses.activate
+def test_saml_diagnostic_error_includes_url_and_fields(tmp_path):
+    responses.add(responses.GET, _PLUGGABLE, body=_fixture("no_form.html"), status=200)
+    client = wc.WikiClient(_user_config(tmp_path))
+    site = _saml_site(client)
+    cred = client._config.user
+    assert cred is not None
+    with pytest.raises(AuthError) as exc_info:
+        client._saml_login(site, cred)
+    message = str(exc_info.value)
+    assert "url=" in message
+    assert "status=200" in message
+    assert is_safe_auth_message(message)
+
+
+@responses.activate
+def test_saml_step_logging_emits_debug(caplog, tmp_path, monkeypatch):
+    """DEBUG logs are emitted at each SAML stage without credential values."""
+    _register_saml_happy_path()
+    caplog.set_level(logging.DEBUG, logger="wg21_wiki_mcp.wiki_client")
+    client = wc.WikiClient(_user_config(tmp_path))
+    _user_login_via_saml(client, monkeypatch)
+    combined = caplog.text
+    assert "SAML sso_get" in combined
+    assert "SAML idp_form_parse" in combined
+    assert "test-password-xyz" not in combined

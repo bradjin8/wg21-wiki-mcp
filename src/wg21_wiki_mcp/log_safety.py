@@ -50,12 +50,24 @@ _KNOWN_SAFE_AUTH_MESSAGES = frozenset(
     }
 )
 
+# SAML errors with diagnostic context (url/status/fields) use these prefixes.
+_SAML_DIAGNOSTIC_PREFIXES = (
+    "SAML SSO entry point returned",
+    "SAML IdP login form not found",
+    "Could not locate username/password fields",
+    "SAML login failed (no SAMLResponse",
+    "SAML ACS endpoint rejected",
+    "SAML SSO request failed",
+)
+
 _SESSION_REAUTH_MESSAGE_RE = re.compile(r"^Session could not be re-established after \d+ attempts\.$")
 
 
 def is_safe_auth_message(message: str) -> bool:
     """Return True if ``message`` was constructed without upstream exception text."""
     if message in _KNOWN_SAFE_AUTH_MESSAGES:
+        return True
+    if any(message.startswith(prefix) for prefix in _SAML_DIAGNOSTIC_PREFIXES):
         return True
     if message.startswith("Authentication failed (") and message.endswith("); verify wiki credentials."):
         return True
