@@ -104,6 +104,26 @@ def test_idp_missing_password_field_raises_auth_error(tmp_path):
 
 
 @responses.activate
+def test_idp_post_http_403_raises_auth_error(tmp_path):
+    responses.add(
+        responses.GET,
+        _PLUGGABLE,
+        status=302,
+        headers={"Location": "https://idp.example/login?AuthState=abc123"},
+    )
+    responses.add(responses.GET, _IDP, body=_fixture("idp_login_form.html"), status=200)
+    responses.add(responses.POST, _IDP, body="Forbidden", status=403)
+    client = wc.WikiClient(_user_config(tmp_path))
+    site = _saml_site(client)
+    cred = client._config.user
+    assert cred is not None
+    _assert_no_site(client)
+    with pytest.raises(AuthError, match=r"SAML IdP POST returned HTTP error.*status=403"):
+        client._saml_login(site, cred)
+    _assert_no_site(client)
+
+
+@responses.activate
 def test_idp_post_error_page_raises_auth_error(tmp_path):
     responses.add(
         responses.GET,

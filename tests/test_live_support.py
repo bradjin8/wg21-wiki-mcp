@@ -44,6 +44,14 @@ def test_auth_error_waf_status_detects_legacy_http_phrase():
     assert auth_error_waf_status(exc) == 403
 
 
+def test_auth_error_waf_status_prefers_waf_code_in_aggregated_message():
+    exc = AuthError(
+        "clientlogin unavailable; SAML SSO entry point returned HTTP error.; "
+        "url=https://w.example; status=500; status=403"
+    )
+    assert auth_error_waf_status(exc) == 403
+
+
 def test_auth_error_is_unreachable_true_for_network_failures():
     exc = AuthError("Authentication failed (bot: ConnectionError, user: Timeout); verify wiki credentials.")
     assert auth_error_is_unreachable(exc) is True

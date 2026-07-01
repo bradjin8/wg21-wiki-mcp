@@ -40,8 +40,7 @@ def auth_error_waf_status(exc: AuthError) -> int | None:
     """Return a WAF/edge block status code embedded in ``exc``, if any."""
     message = str(exc)
     for pattern in (_HTTP_STATUS_RE, _HTTP_STATUS_LEGACY_RE):
-        match = pattern.search(message)
-        if match is not None:
+        for match in pattern.finditer(message):
             status = int(match.group(1))
             if status in WAF_EDGE_HTTP_CODES:
                 return status

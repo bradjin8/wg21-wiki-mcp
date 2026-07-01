@@ -120,7 +120,8 @@ def _resolve_saml_credential_fields(
 def _saml_http_request(
     method: Callable[..., requests.Response],
     *args: Any,
-    timeout: float,
+    deadline: float | None,
+    cap: float,
     step: str,
     **kwargs: Any,
 ) -> requests.Response:
@@ -128,6 +129,7 @@ def _saml_http_request(
     request_url = str(args[0]) if args else str(kwargs.get("url", ""))
     last_exc: BaseException | None = None
     for attempt in range(_SAML_MAX_RETRIES):
+        timeout = http_timeout(deadline, cap=cap, on_exceeded=API_TIMEOUT_MSG)
         _log_saml_step(step, attempt=attempt + 1, max_attempts=_SAML_MAX_RETRIES, url=request_url or None)
         try:
             resp = method(*args, timeout=timeout, **kwargs)
@@ -140,7 +142,11 @@ def _saml_http_request(
                 url=request_url or None,
             )
             if attempt + 1 < _SAML_MAX_RETRIES:
-                time.sleep(min(2**attempt, 5))
+                sleep_s = min(2**attempt, 5)
+                if deadline is not None:
+                    remaining = timeout_remaining(deadline, on_exceeded=API_TIMEOUT_MSG)
+                    sleep_s = min(sleep_s, remaining)
+                time.sleep(sleep_s)
                 continue
             raise _saml_error(
                 f"SAML SSO request failed: {type(exc).__name__}.",
@@ -159,7 +165,11 @@ def _saml_http_request(
                 url=resp.url,
                 attempt=attempt + 1,
             )
-            time.sleep(min(2**attempt, 5))
+            sleep_s = min(2**attempt, 5)
+            if deadline is not None:
+                remaining = timeout_remaining(deadline, on_exceeded=API_TIMEOUT_MSG)
+                sleep_s = min(sleep_s, remaining)
+            time.sleep(sleep_s)
             continue
         return resp
 
@@ -399,13 +409,14 @@ class WikiClient:
 
         session = site.connection  # reuse mwclient's requests.Session so cookies persist
         start = f"{self._config.base_url}/index.php?title=Special:PluggableAuthLogin"
-        timeout = self._http_timeout(deadline, cap=float(self._config.saml_timeout_s))
+        saml_cap = float(self._config.saml_timeout_s)
 
         resp = _saml_http_request(
             session.get,
             start,
             allow_redirects=True,
-            timeout=timeout,
+            deadline=deadline,
+            cap=saml_cap,
             step="sso_get",
         )
         _log_saml_step("sso_get_done", url=resp.url, status=resp.status_code)
@@ -448,10 +459,18 @@ class WikiClient:
             action,
             data=fields,
             allow_redirects=True,
-            timeout=timeout,
+            deadline=deadline,
+            cap=saml_cap,
             step="idp_post",
         )
         _log_saml_step("idp_post_done", url=posted.url, status=posted.status_code)
+
+        if not posted.ok:
+            raise _saml_error(
+                "SAML IdP POST returned HTTP error.",
+                url=posted.url,
+                status=posted.status_code,
+            )
 
         soup2 = BeautifulSoup(posted.text, "lxml")
         saml_form = next((f for f in soup2.find_all("form") if f.find("input", {"name": "SAMLResponse"})), None)
@@ -471,7 +490,8 @@ class WikiClient:
             acs,
             data=payload,
             allow_redirects=True,
-            timeout=timeout,
+            deadline=deadline,
+            cap=saml_cap,
             step="acs_post",
         )
         _log_saml_step("acs_post_done", url=acs_resp.url, status=acs_resp.status_code)

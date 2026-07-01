@@ -50,24 +50,78 @@ _KNOWN_SAFE_AUTH_MESSAGES = frozenset(
     }
 )
 
-# SAML errors with diagnostic context (url/status/fields) use these prefixes.
-_SAML_DIAGNOSTIC_PREFIXES = (
-    "SAML SSO entry point returned",
-    "SAML IdP login form not found",
-    "Could not locate username/password fields",
-    "SAML login failed (no SAMLResponse",
-    "SAML ACS endpoint rejected",
-    "SAML SSO request failed",
+# Static SAML heads that may be followed by validated "; url=...; status=...; fields=..." suffixes.
+_SAML_STATIC_HEADS = (
+    "SAML SSO entry point returned HTTP error.",
+    "SAML IdP login form not found (page changed or extra step required).",
+    "Could not locate username/password fields on the IdP form.",
+    "SAML login failed (no SAMLResponse; check credentials/MFA).",
+    "SAML ACS endpoint rejected the response.",
+    "SAML IdP POST returned HTTP error.",
 )
 
+_SAML_REQUEST_FAILED_HEAD_RE = re.compile(r"^SAML SSO request failed: \w+\.$")
+_SAFE_FIELDS_SUFFIX_RE = re.compile(r"^fields=\[(?:'[\w.-]+'(?:, '[\w.-]+')*)?\]$")
+
 _SESSION_REAUTH_MESSAGE_RE = re.compile(r"^Session could not be re-established after \d+ attempts\.$")
+
+
+def _split_saml_diagnostic(message: str) -> tuple[str, str] | None:
+    """Split a SAML diagnostic into static head and optional validated suffix."""
+    if message in _KNOWN_SAFE_AUTH_MESSAGES or message in _SAML_STATIC_HEADS:
+        return message, ""
+    for head in _SAML_STATIC_HEADS:
+        prefix = head + "; "
+        if message.startswith(prefix):
+            return head, message[len(prefix) :]
+    head_end = message.find("; url=")
+    if head_end == -1:
+        head_end = message.find("; status=")
+    if head_end == -1:
+        head_end = message.find("; fields=")
+    head = message if head_end == -1 else message[:head_end]
+    if _SAML_REQUEST_FAILED_HEAD_RE.match(head):
+        suffix = message[len(head) + 2 :] if head_end != -1 else ""
+        return head, suffix
+    return None
+
+
+def _is_safe_saml_diagnostic_suffix(suffix: str) -> bool:
+    if not suffix:
+        return True
+    for part in suffix.split("; "):
+        if part.startswith("url="):
+            url = part[4:]
+            if not url.startswith(("http://", "https://")) or " " in url or sanitize_text(url) != url:
+                return False
+        elif part.startswith("status="):
+            try:
+                code = int(part[7:])
+            except ValueError:
+                return False
+            if not 100 <= code <= 599:
+                return False
+        elif part.startswith("fields="):
+            if not _SAFE_FIELDS_SUFFIX_RE.match(part):
+                return False
+        else:
+            return False
+    return True
+
+
+def _is_safe_saml_diagnostic(message: str) -> bool:
+    split = _split_saml_diagnostic(message)
+    if split is None:
+        return False
+    _head, suffix = split
+    return _is_safe_saml_diagnostic_suffix(suffix)
 
 
 def is_safe_auth_message(message: str) -> bool:
     """Return True if ``message`` was constructed without upstream exception text."""
     if message in _KNOWN_SAFE_AUTH_MESSAGES:
         return True
-    if any(message.startswith(prefix) for prefix in _SAML_DIAGNOSTIC_PREFIXES):
+    if _is_safe_saml_diagnostic(message):
         return True
     if message.startswith("Authentication failed (") and message.endswith("); verify wiki credentials."):
         return True
@@ -77,6 +131,12 @@ def is_safe_auth_message(message: str) -> bool:
 def auth_error_mcp_message(exc: BaseException) -> str:
     """Return the MCP-facing message for an authentication failure."""
     msg = str(exc) or AUTH_FAILURE_MESSAGE
+    split = _split_saml_diagnostic(msg)
+    if split is not None:
+        head, suffix = split
+        if _is_safe_saml_diagnostic_suffix(suffix):
+            return head
+        return AUTH_FAILURE_MESSAGE
     if is_safe_auth_message(msg):
         return msg
     return AUTH_FAILURE_MESSAGE

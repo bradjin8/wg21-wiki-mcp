@@ -87,6 +87,43 @@ class TestSanitizeText:
         safe = summarize_auth_failures(["bot: LoginError"])
         assert auth_error_mcp_message(AuthErrorModel(safe)) == safe
 
+    def test_saml_diagnostic_mcp_message_strips_dynamic_suffix(self):
+        full = "SAML SSO entry point returned HTTP error.; url=https://w.example; status=403"
+        assert auth_error_mcp_message(AuthErrorModel(full)) == "SAML SSO entry point returned HTTP error."
+
+    def test_saml_diagnostic_with_unsafe_url_falls_back(self):
+        unsafe = "SAML SSO entry point returned HTTP error.; url=https://w.example/?password=leaked"
+        assert auth_error_mcp_message(AuthErrorModel(unsafe)) == AUTH_FAILURE_MESSAGE
+        assert not is_safe_auth_message(unsafe)
+
+    def test_saml_diagnostic_with_valid_suffix_is_safe(self):
+        msg = "SAML SSO entry point returned HTTP error.; url=https://w.example; status=403"
+        assert is_safe_auth_message(msg)
+
+    def test_saml_request_failed_diagnostic_is_safe(self):
+        msg = "SAML SSO request failed: Timeout.; url=https://w.example; status=504"
+        assert is_safe_auth_message(msg)
+        assert auth_error_mcp_message(AuthErrorModel(msg)) == "SAML SSO request failed: Timeout."
+
+    def test_saml_diagnostic_rejects_invalid_status_suffix(self):
+        msg = "SAML SSO entry point returned HTTP error.; status=not-a-number"
+        assert not is_safe_auth_message(msg)
+
+    def test_saml_diagnostic_rejects_invalid_fields_suffix(self):
+        msg = "Could not locate username/password fields on the IdP form.; fields=['bad name']"
+        assert not is_safe_auth_message(msg)
+
+    def test_saml_diagnostic_rejects_unknown_suffix_part(self):
+        msg = "SAML ACS endpoint rejected the response.; evil=payload"
+        assert not is_safe_auth_message(msg)
+
+    def test_saml_static_head_without_suffix_is_safe(self):
+        assert is_safe_auth_message("SAML IdP POST returned HTTP error.")
+
+    def test_saml_diagnostic_rejects_status_out_of_range(self):
+        msg = "SAML SSO entry point returned HTTP error.; status=99"
+        assert not is_safe_auth_message(msg)
+
     def test_register_config_secrets(self, tmp_path):
         config = Config(
             base_url="https://w.example",
