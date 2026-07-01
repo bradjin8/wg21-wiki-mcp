@@ -11,6 +11,11 @@ for the pre-1.0 API stability policy and deprecation timeline.
 ## [Unreleased]
 
 ### Changed
+- SAML headless login (`_saml_login`): configurable IdP field names
+  (`WIKI_SAML_USERNAME_FIELD`, `WIKI_SAML_PASSWORD_FIELD`) and per-step timeout
+  (`WIKI_SAML_TIMEOUT_S`); DOM-based field detection fallback; retry on transient
+  HTTP errors; diagnostic `AuthError` context (url, status, field names); DEBUG
+  step logging.
 - Tighten `mwclient` runtime pin to `>=0.11.0,<0.12` so unexpected minor/major
   releases cannot land silently via Dependabot.
 

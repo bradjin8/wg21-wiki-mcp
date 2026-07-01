@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Decoy Text Field IdP</title></head>
+<body>
+<form action="https://idp.example/login?AuthState=abc123" method="post">
+  <input type="hidden" name="AuthState" value="abc123">
+  <input type="text" name="display_name" autocomplete="off">
+  <input type="text" name="login_id" autocomplete="username">
+  <input type="password" name="credential" autocomplete="current-password">
+  <button type="submit">Sign in</button>
+</form>
+</body>
+</html>

@@ -146,7 +146,7 @@ jobs:
           WIKI_BOT_PASSWORD: ${{ secrets.WIKI_BOT_PASSWORD }}
           WIKI_USER_USERNAME: ${{ secrets.WIKI_USER_USERNAME }}
           WIKI_USER_PASSWORD: ${{ secrets.WIKI_USER_PASSWORD }}
-        run: pytest -m canary --no-cov
+        run: pytest -m canary --no-cov -o log_cli=true --log-cli-level=WARNING
 
   secret-scan:
     name: secret scan (gitleaks)
@@ -222,4 +222,4 @@ jobs:
           WIKI_BOT_PASSWORD: ${{ secrets.WIKI_BOT_PASSWORD }}
           WIKI_USER_USERNAME: ${{ secrets.WIKI_USER_USERNAME }}
           WIKI_USER_PASSWORD: ${{ secrets.WIKI_USER_PASSWORD }}
-        run: pytest -m live --no-cov
+        run: pytest -m live --no-cov -o log_cli=true --log-cli-level=WARNING

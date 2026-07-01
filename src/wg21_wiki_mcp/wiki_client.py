@@ -14,6 +14,7 @@ The client never transforms page content; it returns exact wikitext.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -35,19 +36,149 @@ _AUTH_ERROR_CODES = frozenset({"readapidenied", "assertuserfailed", "notloggedin
 _BACKOFF_CODES = frozenset({"maxlag", "ratelimited"})
 _MAX_RETRIES = 6
 _MAX_TITLES_PER_BATCH = 50  # safe limit for accounts without apihighlimits
+_SAML_TIMEOUT_S = 30
+_SAML_MAX_RETRIES = 2
+_TRANSIENT_HTTP_CODES = frozenset(range(500, 600))
 _UNSET_TIMEOUT = object()
 
+_log = logging.getLogger(__name__)
 
-def _saml_session_request(
+
+def _log_saml_step(step: str, **context: object) -> None:
+    """Emit a DEBUG log for one SAML flow stage (no credential values)."""
+    if not _log.isEnabledFor(logging.DEBUG):
+        return
+    if context:
+        details = " ".join(f"{key}={value!r}" for key, value in context.items())
+        _log.debug("SAML %s %s", step, details)
+    else:
+        _log.debug("SAML %s", step)
+
+
+def _saml_error(
+    message: str,
+    *,
+    url: str | None = None,
+    status: int | None = None,
+    field_names: list[str] | None = None,
+) -> AuthError:
+    parts = [message]
+    if url:
+        parts.append(f"url={url}")
+    if status is not None:
+        parts.append(f"status={status}")
+    if field_names is not None:
+        parts.append(f"fields={field_names}")
+    return AuthError("; ".join(parts))
+
+
+def _form_named_inputs(form: object) -> dict[str, str]:
+    from bs4 import Tag
+
+    if not isinstance(form, Tag):
+        return {}
+    return {str(i.get("name")): str(i.get("value", "")) for i in form.find_all("input") if i.get("name")}
+
+
+def _resolve_saml_credential_fields(
+    form: object,
+    fields: dict[str, str],
+    config: Config,
+) -> tuple[str | None, str | None]:
+    from bs4 import Tag
+
+    if not isinstance(form, Tag):
+        return None, None
+
+    if config.saml_username_field and config.saml_username_field in fields:
+        user_field: str | None = config.saml_username_field
+    else:
+        user_input = form.find("input", {"type": "email"}) or form.find("input", {"type": "text", "name": True})
+        name = user_input.get("name") if user_input is not None else None
+        if name:
+            user_field = str(name)
+        elif "username" in fields:
+            user_field = "username"
+        else:
+            user_field = next((n for n in fields if "user" in n.lower() or "email" in n.lower()), None)
+
+    if config.saml_password_field and config.saml_password_field in fields:
+        pass_field: str | None = config.saml_password_field
+    else:
+        pass_input = form.find("input", {"type": "password"})
+        pass_name = pass_input.get("name") if pass_input is not None else None
+        if pass_name:
+            pass_field = str(pass_name)
+        elif "password" in fields:
+            pass_field = "password"
+        else:
+            pass_field = next((n for n in fields if "pass" in n.lower()), None)
+
+    return user_field, pass_field
+
+
+def _saml_http_request(
     method: Callable[..., requests.Response],
     *args: Any,
+    deadline: float | None,
+    cap: float,
+    step: str,
     **kwargs: Any,
 ) -> requests.Response:
-    """Run one SAML HTTP hop; map ``requests`` failures to :class:`AuthError`."""
-    try:
-        return method(*args, **kwargs)
-    except requests.RequestException as exc:
-        raise AuthError(f"SAML SSO request failed: {type(exc).__name__}.") from exc
+    """Run one SAML HTTP hop with retry on transient failures."""
+    request_url = str(args[0]) if args else str(kwargs.get("url", ""))
+    last_exc: BaseException | None = None
+    for attempt in range(_SAML_MAX_RETRIES):
+        timeout = http_timeout(deadline, cap=cap, on_exceeded=API_TIMEOUT_MSG)
+        _log_saml_step(step, attempt=attempt + 1, max_attempts=_SAML_MAX_RETRIES, url=request_url or None)
+        try:
+            resp = method(*args, timeout=timeout, **kwargs)
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            last_exc = exc
+            _log_saml_step(
+                f"{step}_transient_error",
+                error=type(exc).__name__,
+                attempt=attempt + 1,
+                url=request_url or None,
+            )
+            if attempt + 1 < _SAML_MAX_RETRIES:
+                sleep_s = min(2**attempt, 5)
+                if deadline is not None:
+                    remaining = timeout_remaining(deadline, on_exceeded=API_TIMEOUT_MSG)
+                    sleep_s = min(sleep_s, remaining)
+                time.sleep(sleep_s)
+                continue
+            raise _saml_error(
+                f"SAML SSO request failed: {type(exc).__name__}.",
+                url=request_url or None,
+            ) from exc
+        except requests.RequestException as exc:
+            raise _saml_error(
+                f"SAML SSO request failed: {type(exc).__name__}.",
+                url=request_url or None,
+            ) from exc
+
+        if resp.status_code in _TRANSIENT_HTTP_CODES and attempt + 1 < _SAML_MAX_RETRIES:
+            _log_saml_step(
+                f"{step}_retry",
+                status=resp.status_code,
+                url=resp.url,
+                attempt=attempt + 1,
+            )
+            sleep_s = min(2**attempt, 5)
+            if deadline is not None:
+                remaining = timeout_remaining(deadline, on_exceeded=API_TIMEOUT_MSG)
+                sleep_s = min(sleep_s, remaining)
+            time.sleep(sleep_s)
+            continue
+        return resp
+
+    if last_exc is not None:
+        raise _saml_error(
+            f"SAML SSO request failed: {type(last_exc).__name__}.",
+            url=request_url or None,
+        ) from last_exc
+    raise AuthError("SAML SSO request failed after retries.")
 
 
 class _RWLock:
@@ -278,45 +409,98 @@ class WikiClient:
 
         session = site.connection  # reuse mwclient's requests.Session so cookies persist
         start = f"{self._config.base_url}/index.php?title=Special:PluggableAuthLogin"
+        saml_cap = float(self._config.saml_timeout_s)
 
-        resp = _saml_session_request(session.get, start, allow_redirects=True, timeout=self._http_timeout(deadline))
+        resp = _saml_http_request(
+            session.get,
+            start,
+            allow_redirects=True,
+            deadline=deadline,
+            cap=saml_cap,
+            step="sso_get",
+        )
+        _log_saml_step("sso_get_done", url=resp.url, status=resp.status_code)
+
         if not resp.ok:
-            raise AuthError(f"SAML SSO entry point returned HTTP {resp.status_code}.")
+            raise _saml_error(
+                "SAML SSO entry point returned HTTP error.",
+                url=resp.url,
+                status=resp.status_code,
+            )
 
         soup = BeautifulSoup(resp.text, "lxml")
         form = next((f for f in soup.find_all("form") if f.find("input", {"type": "password"})), None)
         if form is None:
-            raise AuthError("SAML IdP login form not found (page changed or extra step required).")
+            field_names = [str(i.get("name")) for i in soup.find_all("input") if i.get("name")]
+            raise _saml_error(
+                "SAML IdP login form not found (page changed or extra step required).",
+                url=resp.url,
+                status=resp.status_code,
+                field_names=field_names or None,
+            )
 
         action = urljoin(resp.url, str(form.get("action") or resp.url))
-        fields = {str(i.get("name")): str(i.get("value", "")) for i in form.find_all("input") if i.get("name")}
-        user_field = (
-            "username"
-            if "username" in fields
-            else next((n for n in fields if "user" in n.lower() or "email" in n.lower()), None)
-        )
-        pass_field = "password" if "password" in fields else next((n for n in fields if "pass" in n.lower()), None)
+        fields = _form_named_inputs(form)
+        _log_saml_step("idp_form_parse", url=resp.url, field_names=list(fields.keys()))
+
+        user_field, pass_field = _resolve_saml_credential_fields(form, fields, self._config)
         if not (user_field and pass_field):
-            raise AuthError("Could not locate username/password fields on the IdP form.")
+            raise _saml_error(
+                "Could not locate username/password fields on the IdP form.",
+                url=resp.url,
+                status=resp.status_code,
+                field_names=list(fields.keys()),
+            )
         fields[user_field] = cred.username
         fields[pass_field] = cred.password
 
-        posted = _saml_session_request(
-            session.post, action, data=fields, allow_redirects=True, timeout=self._http_timeout(deadline)
+        posted = _saml_http_request(
+            session.post,
+            action,
+            data=fields,
+            allow_redirects=True,
+            deadline=deadline,
+            cap=saml_cap,
+            step="idp_post",
         )
+        _log_saml_step("idp_post_done", url=posted.url, status=posted.status_code)
+
+        if not posted.ok:
+            raise _saml_error(
+                "SAML IdP POST returned HTTP error.",
+                url=posted.url,
+                status=posted.status_code,
+            )
+
         soup2 = BeautifulSoup(posted.text, "lxml")
         saml_form = next((f for f in soup2.find_all("form") if f.find("input", {"name": "SAMLResponse"})), None)
         if saml_form is None:
             if "SAMLResponse" not in posted.text:
-                raise AuthError("SAML login failed (no SAMLResponse; check credentials/MFA).")
+                raise _saml_error(
+                    "SAML login failed (no SAMLResponse; check credentials/MFA).",
+                    url=posted.url,
+                    status=posted.status_code,
+                )
+            _log_saml_step("acs_auto_follow", url=posted.url)
             return  # the client auto-followed the POST
         acs = urljoin(posted.url, str(saml_form.get("action")))
-        payload = {str(i["name"]): str(i.get("value", "")) for i in saml_form.find_all("input") if i.get("name")}
-        acs_resp = _saml_session_request(
-            session.post, acs, data=payload, allow_redirects=True, timeout=self._http_timeout(deadline)
+        payload = _form_named_inputs(saml_form)
+        acs_resp = _saml_http_request(
+            session.post,
+            acs,
+            data=payload,
+            allow_redirects=True,
+            deadline=deadline,
+            cap=saml_cap,
+            step="acs_post",
         )
+        _log_saml_step("acs_post_done", url=acs_resp.url, status=acs_resp.status_code)
         if not acs_resp.ok:
-            raise AuthError(f"SAML ACS endpoint rejected the response (HTTP {acs_resp.status_code}).")
+            raise _saml_error(
+                "SAML ACS endpoint rejected the response.",
+                url=acs_resp.url,
+                status=acs_resp.status_code,
+            )
 
     @staticmethod
     def _is_authenticated(site: mwclient.Site) -> bool:
