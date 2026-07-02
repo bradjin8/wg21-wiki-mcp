@@ -17,6 +17,8 @@ sys.modules[_spec.name] = _mod
 _spec.loader.exec_module(_mod)
 main = _mod.main
 
+_BENCH_CACHE_COUNT = "tests/test_benchmark.py::test_benchmark_cache_count"
+
 
 def _bench_json(means: dict[str, float]) -> dict:
     benchmarks = []
@@ -31,50 +33,45 @@ def _bench_json(means: dict[str, float]) -> dict:
 
 
 def test_regression_gate_passes_within_threshold(tmp_path: Path) -> None:
-    name = "tests/test_benchmark.py::test_benchmark_cache_count"
     baseline = tmp_path / "baseline.json"
     current = tmp_path / "current.json"
-    baseline.write_text(json.dumps(_bench_json({name: 10.0})), encoding="utf-8")
-    current.write_text(json.dumps(_bench_json({name: 11.0})), encoding="utf-8")
+    baseline.write_text(json.dumps(_bench_json({_BENCH_CACHE_COUNT: 10.0})), encoding="utf-8")
+    current.write_text(json.dumps(_bench_json({_BENCH_CACHE_COUNT: 11.0})), encoding="utf-8")
 
     assert main([str(current), str(baseline), "--max-regression", "0.20"]) == 0
 
 
 def test_regression_gate_fails_beyond_threshold(tmp_path: Path) -> None:
-    name = "tests/test_benchmark.py::test_benchmark_cache_count"
     baseline = tmp_path / "baseline.json"
     current = tmp_path / "current.json"
-    baseline.write_text(json.dumps(_bench_json({name: 10.0})), encoding="utf-8")
-    current.write_text(json.dumps(_bench_json({name: 13.0})), encoding="utf-8")
+    baseline.write_text(json.dumps(_bench_json({_BENCH_CACHE_COUNT: 10.0})), encoding="utf-8")
+    current.write_text(json.dumps(_bench_json({_BENCH_CACHE_COUNT: 13.0})), encoding="utf-8")
 
     assert main([str(current), str(baseline), "--max-regression", "0.20"]) == 1
 
 
 def test_regression_gate_fails_on_missing_benchmark(tmp_path: Path) -> None:
-    name = "tests/test_benchmark.py::test_benchmark_cache_count"
     baseline = tmp_path / "baseline.json"
     current = tmp_path / "current.json"
-    baseline.write_text(json.dumps(_bench_json({name: 10.0})), encoding="utf-8")
+    baseline.write_text(json.dumps(_bench_json({_BENCH_CACHE_COUNT: 10.0})), encoding="utf-8")
     current.write_text(json.dumps(_bench_json({})), encoding="utf-8")
 
     assert main([str(current), str(baseline)]) == 1
 
 
 def test_regression_gate_exits_on_missing_baseline(tmp_path: Path) -> None:
-    name = "tests/test_benchmark.py::test_benchmark_cache_count"
     current = tmp_path / "current.json"
-    current.write_text(json.dumps(_bench_json({name: 10.0})), encoding="utf-8")
+    current.write_text(json.dumps(_bench_json({_BENCH_CACHE_COUNT: 10.0})), encoding="utf-8")
 
     with pytest.raises(SystemExit, match="could not read baseline"):
         main([str(current), str(tmp_path / "missing.json")])
 
 
 def test_regression_gate_exits_on_invalid_json(tmp_path: Path) -> None:
-    name = "tests/test_benchmark.py::test_benchmark_cache_count"
     baseline = tmp_path / "baseline.json"
     current = tmp_path / "current.json"
     baseline.write_text("{not json", encoding="utf-8")
-    current.write_text(json.dumps(_bench_json({name: 10.0})), encoding="utf-8")
+    current.write_text(json.dumps(_bench_json({_BENCH_CACHE_COUNT: 10.0})), encoding="utf-8")
 
     with pytest.raises(SystemExit, match="could not parse baseline"):
         main([str(current), str(baseline)])

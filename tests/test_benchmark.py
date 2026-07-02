@@ -8,6 +8,7 @@ Synthetic payloads only; isolated SQLite under ``tmp_path``. Run selectively::
 from __future__ import annotations
 
 import random
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
@@ -39,7 +40,7 @@ def _put_entry(cache: Cache, title: str, *, content: str = _WIKITEXT_10KB) -> No
 
 
 @pytest.fixture
-def bench_cache(tmp_path: Path) -> Cache:
+def bench_cache(tmp_path: Path) -> Iterator[Cache]:
     """Isolated cache database for a single benchmark test."""
     with Cache(tmp_path / "bench") as cache:
         yield cache
