@@ -90,9 +90,10 @@ def test_benchmark_cache_concurrent_reads(benchmark, tmp_path: Path) -> None:
             _put_entry(cache, f"Bench:Page:{i}")
         titles = [f"Bench:Page:{i}" for i in range(_BULK_ENTRIES)]
 
-        def concurrent_reads() -> None:
-            with ThreadPoolExecutor(max_workers=_CONCURRENT_WORKERS) as pool:
-                results = list(pool.map(cache.get, titles))
-            assert all(r is not None for r in results)
+        with ThreadPoolExecutor(max_workers=_CONCURRENT_WORKERS) as pool:
 
-        benchmark(concurrent_reads)
+            def concurrent_reads() -> None:
+                results = list(pool.map(cache.get, titles))
+                assert all(r is not None for r in results)
+
+            benchmark(concurrent_reads)

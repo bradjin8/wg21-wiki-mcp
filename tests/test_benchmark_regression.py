@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_cache_benchmark_regression.py"
 _spec = importlib.util.spec_from_file_location("check_cache_benchmark_regression", _SCRIPT)
 assert _spec and _spec.loader
@@ -56,3 +58,34 @@ def test_regression_gate_fails_on_missing_benchmark(tmp_path: Path) -> None:
     current.write_text(json.dumps(_bench_json({})), encoding="utf-8")
 
     assert main([str(current), str(baseline)]) == 1
+
+
+def test_regression_gate_exits_on_missing_baseline(tmp_path: Path) -> None:
+    name = "tests/test_benchmark.py::test_benchmark_cache_count"
+    current = tmp_path / "current.json"
+    current.write_text(json.dumps(_bench_json({name: 10.0})), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="could not read baseline"):
+        main([str(current), str(tmp_path / "missing.json")])
+
+
+def test_regression_gate_exits_on_invalid_json(tmp_path: Path) -> None:
+    name = "tests/test_benchmark.py::test_benchmark_cache_count"
+    baseline = tmp_path / "baseline.json"
+    current = tmp_path / "current.json"
+    baseline.write_text("{not json", encoding="utf-8")
+    current.write_text(json.dumps(_bench_json({name: 10.0})), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="could not parse baseline"):
+        main([str(current), str(baseline)])
+
+
+def test_committed_baseline_matches_ci_runner() -> None:
+    """Guardrail: committed baseline must be from ubuntu-latest / Python 3.12 CI."""
+    path = Path(__file__).resolve().parents[1] / "benchmarks" / "cache-baseline.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    machine = data["machine_info"]
+    commit = data["commit_info"]
+    assert machine["system"] == "Linux"
+    assert machine["python_version"].startswith("3.12")
+    assert commit["dirty"] is False

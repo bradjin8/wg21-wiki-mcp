@@ -15,9 +15,34 @@ from pathlib import Path
 _DEFAULT_MAX_REGRESSION = 0.20
 
 
+def _load_benchmark_json(path: Path, label: str) -> dict:
+    """Load a pytest-benchmark JSON file, raising ``SystemExit`` on I/O or parse errors."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SystemExit(f"could not read {label} benchmark JSON at {path}: {exc}") from exc
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"could not parse {label} benchmark JSON at {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise SystemExit(f"{label} benchmark JSON at {path} must be a JSON object")
+    return data
+
+
 def _means_by_fullname(data: dict) -> dict[str, float]:
     benchmarks = data.get("benchmarks") or []
-    return {entry["fullname"]: float(entry["stats"]["mean"]) for entry in benchmarks}
+    means: dict[str, float] = {}
+    for index, entry in enumerate(benchmarks):
+        if not isinstance(entry, dict):
+            raise SystemExit(f"benchmark entry at index {index} must be a JSON object")
+        try:
+            fullname = entry["fullname"]
+            mean = float(entry["stats"]["mean"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SystemExit(f"benchmark entry at index {index} is missing fullname/stats.mean: {exc}") from exc
+        means[str(fullname)] = mean
+    return means
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -33,8 +58,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    current = json.loads(args.current.read_text(encoding="utf-8"))
-    baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
+    current = _load_benchmark_json(args.current, "current")
+    baseline = _load_benchmark_json(args.baseline, "baseline")
     cur_means = _means_by_fullname(current)
     base_means = _means_by_fullname(baseline)
 
