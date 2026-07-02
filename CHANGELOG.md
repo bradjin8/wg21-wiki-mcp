@@ -20,6 +20,9 @@ for the pre-1.0 API stability policy and deprecation timeline.
   releases cannot land silently via Dependabot.
 
 ### Added
+- Cache throughput benchmarks (`tests/test_benchmark.py`, `pytest-benchmark`) with
+  CI JSON artifacts and a 20% regression gate against `benchmarks/cache-baseline.json`
+  (`scripts/check_cache_benchmark_regression.py`; gate is `continue-on-error` initially).
 - Opt-in HTTP transports via `WG21_TRANSPORT` (`sse`, `streamable-http`; default
   `stdio` unchanged). Optional `WG21_HTTP_HOST` / `WG21_HTTP_PORT` for bind
   address. See `docs/TRANSPORT-EVAL.md`.
