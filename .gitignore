@@ -23,6 +23,8 @@ build/
 dist/
 *.egg-info/
 .pytest_cache/
+.benchmarks/
+benchmark.json
 .ruff_cache/
 .mypy_cache/
 .coverage
