@@ -97,6 +97,8 @@ pytest tests/test_wiki_client.py tests/test_wiki_client_more.py tests/test_wiki_
 [ARCHITECTURE.md](ARCHITECTURE.md) explains the design, the parse-vs-offload
 policy, and what may break. [docs/DEPENDENCY-RISK.md](docs/DEPENDENCY-RISK.md)
 covers third-party dependency risk (notably `mwclient`) and the succession plan.
+[docs/TRANSPORT-EVAL.md](docs/TRANSPORT-EVAL.md) covers optional HTTP/SSE
+transport evaluation and the opt-in prototype.
 
 ## Pull requests
 

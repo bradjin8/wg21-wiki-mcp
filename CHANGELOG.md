@@ -20,6 +20,9 @@ for the pre-1.0 API stability policy and deprecation timeline.
   releases cannot land silently via Dependabot.
 
 ### Added
+- Opt-in HTTP transports via `WG21_TRANSPORT` (`sse`, `streamable-http`; default
+  `stdio` unchanged). Optional `WG21_HTTP_HOST` / `WG21_HTTP_PORT` for bind
+  address. See `docs/TRANSPORT-EVAL.md`.
 - `docs/DEPENDENCY-RISK.md`: mwclient upstream assessment, alternatives evaluation,
   abstraction boundary, and succession plan; CI PyPI release-age check
   (`scripts/check_mwclient_release_age.py`, `dependency health` job).

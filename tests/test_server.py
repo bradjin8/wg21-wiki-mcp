@@ -173,13 +173,99 @@ def test_wrap_converts_unexpected_exception():
         _wrap(_boom)
 
 
-def test_main_runs_mcp(monkeypatch):
-    called = False
+def test_main_runs_mcp_stdio_default(monkeypatch):
+    monkeypatch.setenv("WIKI_BOT_USERNAME", "Acct@bot")
+    monkeypatch.setenv("WIKI_BOT_PASSWORD", "secret")
+    captured: dict[str, object] = {}
 
-    def _run() -> None:
-        nonlocal called
-        called = True
+    def _run(transport: str = "stdio", mount_path: str | None = None) -> None:
+        captured["transport"] = transport
+        captured["mount_path"] = mount_path
 
     monkeypatch.setattr(server.mcp, "run", _run)
-    server.main()
-    assert called is True
+    try:
+        server.main()
+        assert captured["transport"] == "stdio"
+    finally:
+        with server._state_lock:
+            ctx = server._state.pop("ctx", None)
+        if ctx is not None:
+            ctx.close()
+
+
+def test_main_selects_sse_transport(monkeypatch):
+    monkeypatch.setenv("WIKI_BOT_USERNAME", "Acct@bot")
+    monkeypatch.setenv("WIKI_BOT_PASSWORD", "secret")
+    monkeypatch.setenv("WG21_TRANSPORT", "sse")
+    monkeypatch.setenv("WG21_HTTP_PORT", "8765")
+    captured: dict[str, object] = {}
+
+    def _run(transport: str = "stdio", mount_path: str | None = None) -> None:
+        captured["transport"] = transport
+        captured["mount_path"] = mount_path
+
+    monkeypatch.setattr(server.mcp, "run", _run)
+    original_host = server.mcp.settings.host
+    original_port = server.mcp.settings.port
+    try:
+        server.main()
+        assert captured["transport"] == "sse"
+        assert server.mcp.settings.port == 8765
+    finally:
+        server.mcp.settings.host = original_host
+        server.mcp.settings.port = original_port
+        with server._state_lock:
+            ctx = server._state.pop("ctx", None)
+        if ctx is not None:
+            ctx.close()
+
+
+def test_main_clears_primed_context_on_run_failure(monkeypatch, tmp_path):
+    with server._state_lock:
+        ctx = server._state.pop("ctx", None)
+    if ctx is not None:
+        ctx.close()
+    monkeypatch.setenv("WIKI_BOT_USERNAME", "Acct@bot")
+    monkeypatch.setenv("WIKI_BOT_PASSWORD", "secret")
+    monkeypatch.setenv("ISOCPP_WIKI_CACHE_DIR", str(tmp_path / "c"))
+
+    def _fail(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("startup failed")
+
+    monkeypatch.setattr(server.mcp, "run", _fail)
+    with pytest.raises(RuntimeError, match="startup failed"):
+        server.main()
+    with server._state_lock:
+        assert "ctx" not in server._state
+
+
+def test_main_primes_context_without_re_parsing_env(monkeypatch, tmp_path):
+    with server._state_lock:
+        ctx = server._state.pop("ctx", None)
+    if ctx is not None:
+        ctx.close()
+    monkeypatch.setenv("WIKI_BOT_USERNAME", "Acct@bot")
+    monkeypatch.setenv("WIKI_BOT_PASSWORD", "secret")
+    monkeypatch.setenv("ISOCPP_WIKI_CACHE_DIR", str(tmp_path / "c"))
+    calls = 0
+    real_from_env = server.Config.from_env
+
+    def counting_from_env(*, load_env_file: bool = True):
+        nonlocal calls
+        calls += 1
+        return real_from_env(load_env_file=load_env_file)
+
+    monkeypatch.setattr(server.Config, "from_env", counting_from_env)
+    monkeypatch.setattr(server.mcp, "run", lambda *args, **kwargs: None)
+    try:
+        server.main()
+        primed = server._state.get("ctx")
+        assert primed is not None
+        assert calls == 1
+        assert server.get_context() is primed
+        assert calls == 1
+    finally:
+        with server._state_lock:
+            ctx = server._state.pop("ctx", None)
+        if ctx is not None:
+            ctx.close()

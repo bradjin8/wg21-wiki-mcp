@@ -1,8 +1,10 @@
-"""FastMCP stdio server exposing the WG21 wiki tools.
+"""FastMCP server exposing the WG21 wiki tools.
 
 Run via the ``wg21-wiki-mcp`` console script (or ``python -m
 wg21_wiki_mcp``). Configuration comes from the environment (see README); the
-MCP host supplies it through the server's launch ``env`` block.
+MCP host supplies it through the server's launch ``env`` block. The default
+transport is stdio; set ``WG21_TRANSPORT=sse`` or ``streamable-http`` for an
+experimental HTTP listener (see ``docs/TRANSPORT-EVAL.md``).
 """
 
 from __future__ import annotations
@@ -16,9 +18,10 @@ from mcp.server.fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 
 from . import tools
-from .config import Config
+from .config import DEFAULT_HTTP_HOST, DEFAULT_TRANSPORT, Config
 from .context import ServerContext
 from .errors import WikiMcpError, to_mcp_error
+from .log import get_logger
 from .models import (
     MeetingList,
     MeetingOverview,
@@ -57,6 +60,21 @@ def _wrap(fn: Callable[..., _T], /, *args: Any, **kwargs: Any) -> _T:
 _state: dict[str, ServerContext] = {}
 _state_lock = threading.Lock()
 _shutting_down = False
+
+
+def _prime_context(cfg: Config) -> None:
+    """Seed the shared context from config already parsed at process entry."""
+    with _state_lock:
+        if _state.get("ctx") is None:
+            _state["ctx"] = ServerContext.create(cfg)
+
+
+def _drop_primed_context() -> None:
+    """Close and remove a startup-primed context after a failed ``mcp.run()``."""
+    with _state_lock:
+        ctx = _state.pop("ctx", None)
+    if ctx is not None:
+        ctx.close()
 
 
 def get_context() -> ServerContext:
@@ -220,8 +238,25 @@ def wiki_status() -> WikiStatus:
 
 
 def main() -> None:
-    """Console-script entry point: run the MCP server over stdio."""
-    mcp.run()
+    """Console-script entry point: run the MCP server (stdio by default)."""
+    cfg = Config.from_env()
+    _prime_context(cfg)
+    try:
+        if cfg.transport == DEFAULT_TRANSPORT:
+            mcp.run()
+            return
+        if cfg.http_host != DEFAULT_HTTP_HOST:
+            get_logger("server").warning(
+                "HTTP listener binding to %s (not %s); shared ServerContext is exposed beyond localhost",
+                cfg.http_host,
+                DEFAULT_HTTP_HOST,
+            )
+        mcp.settings.host = cfg.http_host
+        mcp.settings.port = cfg.http_port
+        mcp.run(transport=cfg.transport)
+    except BaseException:
+        _drop_primed_context()
+        raise
 
 
 if __name__ == "__main__":

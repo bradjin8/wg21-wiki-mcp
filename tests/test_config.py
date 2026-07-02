@@ -15,6 +15,12 @@ _KEYS = [
     "ISOCPP_WIKI_TTL_NORMAL",
     "ISOCPP_WIKI_TTL_MEETING",
     "ISOCPP_WIKI_MEETING_WINDOWS",
+    "WIKI_SAML_USERNAME_FIELD",
+    "WIKI_SAML_PASSWORD_FIELD",
+    "WIKI_SAML_TIMEOUT_S",
+    "WG21_TRANSPORT",
+    "WG21_HTTP_HOST",
+    "WG21_HTTP_PORT",
 ]
 
 
@@ -79,3 +85,44 @@ def test_invalid_ttl_falls_back(monkeypatch):
     monkeypatch.setenv("ISOCPP_WIKI_TTL_MEETING", "-5")
     cfg = Config.from_env(load_env_file=False)
     assert cfg.ttl_normal_s == 604800 and cfg.ttl_meeting_s == 3600
+
+
+def test_transport_defaults_to_stdio(monkeypatch):
+    monkeypatch.setenv("WIKI_BOT_USERNAME", "Acct@bot")
+    monkeypatch.setenv("WIKI_BOT_PASSWORD", "secret")
+    cfg = Config.from_env(load_env_file=False)
+    assert cfg.transport == "stdio"
+    assert cfg.http_host == "127.0.0.1"
+    assert cfg.http_port == 8000
+
+
+def test_transport_sse_and_streamable_http(monkeypatch):
+    monkeypatch.setenv("WIKI_BOT_USERNAME", "Acct@bot")
+    monkeypatch.setenv("WIKI_BOT_PASSWORD", "secret")
+    monkeypatch.setenv("WG21_TRANSPORT", "sse")
+    monkeypatch.setenv("WG21_HTTP_HOST", "0.0.0.0")
+    monkeypatch.setenv("WG21_HTTP_PORT", "9001")
+    cfg = Config.from_env(load_env_file=False)
+    assert cfg.transport == "sse"
+    assert cfg.http_host == "0.0.0.0"
+    assert cfg.http_port == 9001
+
+    monkeypatch.setenv("WG21_TRANSPORT", "streamable-http")
+    cfg = Config.from_env(load_env_file=False)
+    assert cfg.transport == "streamable-http"
+
+
+def test_invalid_transport_raises(monkeypatch):
+    monkeypatch.setenv("WIKI_BOT_USERNAME", "Acct@bot")
+    monkeypatch.setenv("WIKI_BOT_PASSWORD", "secret")
+    monkeypatch.setenv("WG21_TRANSPORT", "websocket")
+    with pytest.raises(ConfigError, match="Invalid WG21_TRANSPORT"):
+        Config.from_env(load_env_file=False)
+
+
+def test_invalid_http_port_falls_back(monkeypatch):
+    monkeypatch.setenv("WIKI_BOT_USERNAME", "Acct@bot")
+    monkeypatch.setenv("WIKI_BOT_PASSWORD", "secret")
+    monkeypatch.setenv("WG21_HTTP_PORT", "not-a-port")
+    cfg = Config.from_env(load_env_file=False)
+    assert cfg.http_port == 8000
