@@ -302,6 +302,10 @@ def test_inproc_lock_timeout_with_deadline_raises(fetcher_stack, monkeypatch):
     waiter_thread.join(timeout=5.0)
     assert len(errors) == 1
     assert "timed out" in str(errors[0]).lower()
+    # Regression (F1): the timed-out waiter must not leak its user-count
+    # reference; the slot is eligible for eviction once everyone releases.
+    slot = fetcher._inproc_locks.get("P")
+    assert slot is None or slot.users == 0
 
 
 def test_section_served_from_cache_under_lock(fetcher_stack, monkeypatch):

@@ -14,7 +14,6 @@ re-login, and load control. Cache-missing fetches are:
 
 from __future__ import annotations
 
-import threading
 import time
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -23,7 +22,8 @@ from datetime import datetime, timezone
 from filelock import FileLock, Timeout
 
 from .cache import Cache, CacheEntry, title_hash
-from .deadlines import timeout_remaining
+from .deadlines import PAGE_FETCH_TIMEOUT_MSG, timeout_remaining
+from .locks import EvictableLockMap
 from .log import get_logger
 from .log_safety import safe_exception_summary
 from .models import FetchError
@@ -42,14 +42,6 @@ _SECTION_KEY_SEP = "\0section="
 def section_cache_key(title: str, section: int) -> str:
     """Return the cache/lock key for a page section (distinct from full-page keys)."""
     return f"{title}{_SECTION_KEY_SEP}{section}"
-
-
-@dataclass
-class _InprocLockSlot:
-    """Per-title in-process lock with a user count for safe map eviction."""
-
-    lock: threading.Lock
-    users: int = 0
 
 
 @dataclass(frozen=True)
@@ -75,8 +67,10 @@ class PageFetcher:
         """Wrap a wiki client and shared cache behind the single fetch chokepoint."""
         self._client = client
         self._cache = cache
-        self._inproc_locks: dict[str, _InprocLockSlot] = {}
-        self._inproc_guard = threading.Lock()
+        self._inproc_map = EvictableLockMap(max_entries=lambda: _MAX_INPROC_LOCK_ENTRIES)
+        # Aliases onto the map's internals for direct inspection.
+        self._inproc_locks = self._inproc_map.slots
+        self._inproc_guard = self._inproc_map.guard
 
     def get_page(
         self,
@@ -296,42 +290,15 @@ class PageFetcher:
     # -- locking helpers ----------------------------------------------------
     def _acquire_inproc(self, stack: ExitStack, titles: list[str], deadline: float | None) -> None:
         for title in titles:
-            with self._inproc_guard:
-                slot = self._inproc_locks.get(title)
-                if slot is None:
-                    slot = _InprocLockSlot(threading.Lock())
-                    self._inproc_locks[title] = slot
-                slot.users += 1
-                lock = slot.lock
-            if deadline is not None:
-                remaining = timeout_remaining(deadline)
-                assert remaining is not None
-                if not lock.acquire(timeout=remaining):
-                    raise FetchError("Page fetch timed out waiting for the wiki.")
-            else:
-                lock.acquire()
-            stack.callback(self._release_inproc, title, lock)
-
-    def _release_inproc(self, title: str, lock: threading.Lock) -> None:
-        lock.release()
-        with self._inproc_guard:
-            slot = self._inproc_locks.get(title)
-            if slot is None or slot.lock is not lock:
-                return
-            slot.users -= 1
-            if slot.users == 0 and not lock.locked():
-                del self._inproc_locks[title]
-            self._evict_idle_inproc_locks()
-
-    def _evict_idle_inproc_locks(self) -> None:
-        """Drop unused lock slots when the map grows past its capacity bound."""
-        if len(self._inproc_locks) <= _MAX_INPROC_LOCK_ENTRIES:
-            return
-        for key, slot in list(self._inproc_locks.items()):
-            if slot.users == 0 and not slot.lock.locked():
-                del self._inproc_locks[key]
-            if len(self._inproc_locks) <= _MAX_INPROC_LOCK_ENTRIES:
-                return
+            # Resolve the remaining budget before touching the lock map so an
+            # already-exhausted deadline can never leave a slot referenced.
+            timeout = timeout_remaining(deadline) if deadline is not None else None
+            lock = self._inproc_map.acquire(
+                title,
+                timeout=timeout,
+                on_timeout=lambda: FetchError(PAGE_FETCH_TIMEOUT_MSG),
+            )
+            stack.callback(self._inproc_map.release, title, lock)
 
     def _acquire_cross_process(self, stack: ExitStack, titles: list[str], deadline: float | None) -> None:
         for title in titles:

@@ -458,6 +458,31 @@ def test_cached_outlinks_stale_on_lock_contention(fake_client, make_ctx):
     assert results == [stale]
 
 
+def test_acquire_outlinks_lock_deadline_expired_no_leak():
+    """Regression (A1): an already-exhausted deadline must not register a user."""
+    key = tools.outlinks_cache_key("2026-06 Expired")
+    with pytest.raises(FetchError, match="timed out"):
+        tools._acquire_outlinks_lock(key, deadline=time.monotonic() - 1.0)
+    slot = tools._outlinks_locks.get(key)
+    assert slot is None or slot.users == 0
+
+
+def test_acquire_outlinks_lock_contention_no_leak():
+    """Regression (A1): a lock-acquire timeout must roll back its user-count."""
+
+    key = tools.outlinks_cache_key("2026-06 Contended")
+    held = tools._acquire_outlinks_lock(key, deadline=None)
+    try:
+        with pytest.raises(FetchError, match="timed out"):
+            tools._acquire_outlinks_lock(key, deadline=time.monotonic() + 0.05)
+        slot = tools._outlinks_locks.get(key)
+        assert slot is not None and slot.users == 1  # only the holder remains
+    finally:
+        tools._release_outlinks_lock(key, held)
+    slot = tools._outlinks_locks.get(key)
+    assert slot is None or slot.users == 0
+
+
 def test_page_outlinks_respects_cap(fake_client, make_ctx):
     ctx = make_ctx(fake_client)
     fake_client.links["2026-06 Alpha"] = [{"title": f"2026-06 Alpha:Link{i}", "ns": 0} for i in range(20)]
