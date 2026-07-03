@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import re
 import threading
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -19,6 +18,7 @@ from .cache import CacheEntry, title_hash
 from .context import ServerContext
 from .deadlines import MEETING_TOOL_TIMEOUT_MSG, composite_deadline, timeout_remaining
 from .fetch import DEFAULT_COMPOSITE_MAX_WAIT_S
+from .locks import EvictableLockMap
 from .log import get_logger
 from .log_safety import safe_exception_summary
 from .models import (
@@ -55,62 +55,28 @@ _OUTLINKS_KEY_SEP = "\0outlinks="
 _MAX_OUTLINKS_LOCK_ENTRIES = 256
 
 
-@dataclass
-class _OutlinksLockSlot:
-    """Per-meeting outlink lock with a user count for safe map eviction."""
-
-    lock: threading.Lock
-    users: int = 0
-
-
-_outlinks_locks: dict[str, _OutlinksLockSlot] = {}
-_outlinks_lock_guard = threading.Lock()
+_outlinks_map = EvictableLockMap(max_entries=lambda: _MAX_OUTLINKS_LOCK_ENTRIES)
+# Alias onto the map's slot table for direct inspection.
+_outlinks_locks = _outlinks_map.slots
 
 
 def _remaining(deadline: float | None) -> float | None:
     return timeout_remaining(deadline, on_exceeded=MEETING_TOOL_TIMEOUT_MSG)
 
 
-def _evict_idle_outlinks_locks() -> None:
-    if len(_outlinks_locks) <= _MAX_OUTLINKS_LOCK_ENTRIES:
-        return
-    for key, slot in list(_outlinks_locks.items()):
-        if slot.users == 0 and not slot.lock.locked():
-            del _outlinks_locks[key]
-        if len(_outlinks_locks) <= _MAX_OUTLINKS_LOCK_ENTRIES:
-            return
-
-
 def _acquire_outlinks_lock(key: str, deadline: float | None) -> threading.Lock:
-    with _outlinks_lock_guard:
-        slot = _outlinks_locks.get(key)
-        if slot is None:
-            slot = _OutlinksLockSlot(threading.Lock())
-            _outlinks_locks[key] = slot
-        slot.users += 1
-        lock = slot.lock
-    if deadline is not None:
-        remaining = _remaining(deadline)
-        assert remaining is not None
-        if not lock.acquire(timeout=remaining):
-            _release_outlinks_lock(key, lock, acquired=False)
-            raise FetchError("Meeting tool timed out waiting for the wiki.")
-    else:
-        lock.acquire()
-    return lock
+    # Resolve the remaining budget before touching the lock map so an
+    # already-exhausted deadline can never leave a slot referenced.
+    timeout = _remaining(deadline) if deadline is not None else None
+    return _outlinks_map.acquire(
+        key,
+        timeout=timeout,
+        on_timeout=lambda: FetchError(MEETING_TOOL_TIMEOUT_MSG),
+    )
 
 
-def _release_outlinks_lock(key: str, lock: threading.Lock, *, acquired: bool = True) -> None:
-    if acquired:
-        lock.release()
-    with _outlinks_lock_guard:
-        slot = _outlinks_locks.get(key)
-        if slot is None or slot.lock is not lock:
-            return
-        slot.users -= 1
-        if slot.users == 0 and not lock.locked():
-            del _outlinks_locks[key]
-        _evict_idle_outlinks_locks()
+def _release_outlinks_lock(key: str, lock: threading.Lock) -> None:
+    _outlinks_map.release(key, lock)
 
 
 def _clamp(value: int, lo: int, hi: int) -> int:

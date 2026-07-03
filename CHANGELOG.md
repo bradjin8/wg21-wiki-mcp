@@ -67,6 +67,13 @@ for the pre-1.0 API stability policy and deprecation timeline.
 - `CONTRIBUTING.md`: document ruleset `wg21-wiki-mcp-protection` (replaces legacy branch-protection UI wording).
 
 ### Fixed
+- In-process lock slots no longer leak their reference count when acquisition times
+  out on an exhausted deadline (`PageFetcher._acquire_inproc` and the outlink lock in
+  `tools.py`). Previously a timed-out waiter left `slot.users` inflated, so the slot
+  could never be evicted and the lock maps grew without bound under repeated timeouts.
+  The reference-counted lock map is now a single shared implementation
+  (`wg21_wiki_mcp.locks.EvictableLockMap`) used by both modules, so the fix cannot
+  diverge.
 - `WikiClient.api()`: replace the exclusive session lock with a reader-writer lock so
   concurrent read-only ``query`` calls are not serialized across network round-trips;
   login, re-login, and close still take an exclusive writer lock.
