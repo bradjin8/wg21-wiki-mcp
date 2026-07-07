@@ -25,6 +25,7 @@ _MIN_SECRET_LEN = 4
 
 # Runtime registry of literal values that must never appear in logs.
 _redactions: set[str] = set()
+_redactions_snapshot: tuple[str, ...] = ()
 _redactions_lock = threading.Lock()
 
 # Patterns that often precede credential material in exception or debug text.
@@ -147,18 +148,30 @@ def auth_error_mcp_message(exc: BaseException) -> str:
     return AUTH_FAILURE_MESSAGE
 
 
+def _rebuild_redactions_snapshot_locked() -> None:
+    """Refresh longest-first snapshot; caller must hold ``_redactions_lock``."""
+    global _redactions_snapshot
+    _redactions_snapshot = tuple(sorted(_redactions, key=len, reverse=True))
+
+
 def _sorted_redactions_snapshot() -> tuple[str, ...]:
-    """Return registered redactions sorted longest-first (snapshot under lock)."""
+    """Return the cached redactions snapshot (longest-first)."""
     with _redactions_lock:
-        return tuple(sorted(_redactions, key=len, reverse=True))
+        return _redactions_snapshot
 
 
 def register_redactions(*values: str | None) -> None:
     """Register literal strings to scrub from every log record."""
     with _redactions_lock:
+        changed = False
         for value in values:
             if value and len(value) >= _MIN_SECRET_LEN:
+                before = len(_redactions)
                 _redactions.add(value)
+                if len(_redactions) != before:
+                    changed = True
+        if changed:
+            _rebuild_redactions_snapshot_locked()
 
 
 def register_config_secrets(config: Config) -> None:
@@ -171,6 +184,7 @@ def clear_redactions() -> None:
     """Clear the redaction registry (for tests)."""
     with _redactions_lock:
         _redactions.clear()
+        _rebuild_redactions_snapshot_locked()
 
 
 def sanitize_text(text: str) -> str:
