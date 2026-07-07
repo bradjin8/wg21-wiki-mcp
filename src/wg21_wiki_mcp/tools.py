@@ -56,8 +56,6 @@ _MAX_OUTLINKS_LOCK_ENTRIES = 256
 
 
 _outlinks_map = EvictableLockMap(max_entries=lambda: _MAX_OUTLINKS_LOCK_ENTRIES)
-# Alias onto the map's slot table for direct inspection.
-_outlinks_locks = _outlinks_map.slots
 
 
 def _remaining(deadline: float | None) -> float | None:
@@ -83,7 +81,7 @@ def _clamp(value: int, lo: int, hi: int) -> int:
     return max(lo, min(value, hi))
 
 
-def outlinks_cache_key(title: str) -> str:
+def _outlinks_cache_key(title: str) -> str:
     """Return the cache key for a meeting page's outlink index."""
     return f"{title}{_OUTLINKS_KEY_SEP}"
 
@@ -152,7 +150,7 @@ def _cached_page_outlinks(
 ) -> list[str]:
     """Outlink index for ``title``, cached for the current meeting-aware TTL."""
     ttl_seconds = ctx.current_ttl()
-    key = outlinks_cache_key(title)
+    key = _outlinks_cache_key(title)
     entry = ctx.cache.get(key)
     stale_entry = entry
     if entry is not None and entry.age_seconds() < ttl_seconds:
