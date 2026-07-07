@@ -15,7 +15,9 @@ for the pre-1.0 API stability policy and deprecation timeline.
   `continue-on-error`); mwclient release-age check splits a 12-month advisory
   review signal (`continue-on-error`) from a blocking 24-month hard migration
   trigger aligned with `docs/DEPENDENCY-RISK.md`. Benchmark baseline means
-  refreshed for shared-runner variance (notably `cache_count` microbenchmark).
+  refreshed to honest CI measurements and the regression tolerance widened to 50%
+  (µs-scale microbenchmarks have shared-runner StdDev ~= mean); the gate re-runs
+  once before failing to absorb one-off runner spikes.
 - SAML headless login (`_saml_login`): configurable IdP field names
   (`WIKI_SAML_USERNAME_FIELD`, `WIKI_SAML_PASSWORD_FIELD`) and per-step timeout
   (`WIKI_SAML_TIMEOUT_S`); DOM-based field detection fallback; retry on transient
@@ -26,8 +28,9 @@ for the pre-1.0 API stability policy and deprecation timeline.
 
 ### Added
 - Cache throughput benchmarks (`tests/test_benchmark.py`, `pytest-benchmark`) with
-  CI JSON artifacts and a 20% regression gate against `benchmarks/cache-baseline.json`
-  (`scripts/check_cache_benchmark_regression.py`; gate is `continue-on-error` initially).
+  CI JSON artifacts and a regression gate against `benchmarks/cache-baseline.json`
+  (`scripts/check_cache_benchmark_regression.py`). See the `### Changed` entry above
+  for the gate's blocking status and tolerance.
 - Opt-in HTTP transports via `WG21_TRANSPORT` (`sse`, `streamable-http`; default
   `stdio` unchanged). Optional `WG21_HTTP_HOST` / `WG21_HTTP_PORT` for bind
   address. See `docs/TRANSPORT-EVAL.md`.

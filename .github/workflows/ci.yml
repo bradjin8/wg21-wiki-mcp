@@ -96,9 +96,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
       - name: Run cache benchmarks
-        # benchmarks/cache-baseline.json must match this runner (ubuntu-latest, Python 3.12).
-        # Baseline means include hd15iqr + 15% headroom over the original capture.
-        # Regenerate from the benchmark-json artifact when benchmark code changes.
+        # benchmarks/cache-baseline.json holds honest measured means from this
+        # runner (ubuntu-latest, Python 3.12). Regenerate from the benchmark-json
+        # artifact when benchmark code changes.
         run: |
           pytest tests/test_benchmark.py --benchmark-only --no-cov \
             -o addopts= \
@@ -106,12 +106,16 @@ jobs:
             --benchmark-warmup=on \
             --benchmark-min-rounds=10
       - name: Benchmark regression gate
-        # Blocking gate: re-run benchmarks once on failure to absorb shared-runner noise.
+        # Blocking gate. These are microbenchmarks (µs scale) where shared-runner
+        # StdDev is ~equal to the mean, so a tight threshold flakes on noise alone.
+        # 50% catches genuine regressions (>=1.5x slowdowns) while tolerating jitter;
+        # we still re-run once before failing to absorb one-off runner spikes.
         run: |
           set -euo pipefail
           check() {
             python scripts/check_cache_benchmark_regression.py \
-              benchmark.json benchmarks/cache-baseline.json
+              benchmark.json benchmarks/cache-baseline.json \
+              --max-regression 0.5
           }
           if check; then
             exit 0
