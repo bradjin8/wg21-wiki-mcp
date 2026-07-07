@@ -33,11 +33,17 @@ Figures below were verified on **2026-06-30** against PyPI and GitHub.
 | API drift | **Low–Medium** | WG21 wiki is read-only; we use stable Action API query modules |
 | Credential handling | **Low** | Credentials live in env vars; `mwclient` uses HTTPS via `requests` (0.11.0+) |
 
-CI runs `scripts/check_mwclient_release_age.py` on every push/PR. It **fails** when the
-latest PyPI release is older than 12 months (currently true). The job uses
-`continue-on-error: true` so merges are not blocked while the documented decision is
-"keep with monitoring"; the failure is visible in the Actions UI and should trigger
-quarterly review per the succession plan below.
+CI runs `scripts/check_mwclient_release_age.py` on every push/PR in two steps:
+
+| Step | Threshold | Blocking? | Purpose |
+|------|-----------|-----------|---------|
+| **12-month review signal** | `--max-age-days 365 --fail-reason review` | No (`continue-on-error: true`) | Surfaces the quarterly review trigger from the succession table; currently **fails** (~22 months since `0.11.0`) but does not block merges |
+| **24-month hard trigger** | `--max-age-days 730 --fail-reason hard` | **Yes** | Blocks merges when the documented migration boundary is breached (release age > 24 months or equivalent policy) |
+
+A blocking CVE on the pinned release would also force migration per the succession table;
+that case is handled by maintainer review and Dependabot/OSV monitoring until an
+automated CVE gate is added. The hard age gate is **green** today (`0.11.0` is under
+24 months).
 
 Dependabot opens weekly runtime-dependency PRs (`/.github/dependabot.yml`), which
 surface new `mwclient` releases when they ship.
@@ -130,7 +136,8 @@ Fork should track the abstraction boundary table and publish an internal tag onl
 - **CI:** `dependency health (mwclient release age)` in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
 - **Dependabot:** weekly pip updates for `mwclient`
 - **Lockfile:** `requirements-lock.txt` pins exact `mwclient==0.11.0`; lockfile job fails if stale
-- **Manual:** `python scripts/check_mwclient_release_age.py` (optional `--max-age-days N`)
+- **Manual:** `python scripts/check_mwclient_release_age.py` (optional `--max-age-days N`,
+  `--fail-reason review|hard`)
 
 ## References
 
