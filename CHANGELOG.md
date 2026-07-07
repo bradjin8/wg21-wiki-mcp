@@ -13,7 +13,8 @@ for the pre-1.0 API stability policy and deprecation timeline.
 ### Security
 - `log_safety.py`: guard the module-level `_redactions` registry with a lock;
   `sanitize_text()` snapshots under the lock so concurrent register/clear cannot
-  raise or skip redactions on free-threaded Python 3.13+.
+  raise or skip redactions. Structural safety under free-threaded Python 3.13+;
+  CI runs CPython 3.13 (GIL), not `python3.13t`.
 
 ### Changed
 - SAML headless login (`_saml_login`): configurable IdP field names
