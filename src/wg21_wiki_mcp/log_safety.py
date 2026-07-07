@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -24,6 +25,7 @@ _MIN_SECRET_LEN = 4
 
 # Runtime registry of literal values that must never appear in logs.
 _redactions: set[str] = set()
+_redactions_lock = threading.Lock()
 
 # Patterns that often precede credential material in exception or debug text.
 _CREDENTIAL_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -145,11 +147,18 @@ def auth_error_mcp_message(exc: BaseException) -> str:
     return AUTH_FAILURE_MESSAGE
 
 
+def _sorted_redactions_snapshot() -> tuple[str, ...]:
+    """Return registered redactions sorted longest-first (snapshot under lock)."""
+    with _redactions_lock:
+        return tuple(sorted(_redactions, key=len, reverse=True))
+
+
 def register_redactions(*values: str | None) -> None:
     """Register literal strings to scrub from every log record."""
-    for value in values:
-        if value and len(value) >= _MIN_SECRET_LEN:
-            _redactions.add(value)
+    with _redactions_lock:
+        for value in values:
+            if value and len(value) >= _MIN_SECRET_LEN:
+                _redactions.add(value)
 
 
 def register_config_secrets(config: Config) -> None:
@@ -160,7 +169,8 @@ def register_config_secrets(config: Config) -> None:
 
 def clear_redactions() -> None:
     """Clear the redaction registry (for tests)."""
-    _redactions.clear()
+    with _redactions_lock:
+        _redactions.clear()
 
 
 def sanitize_text(text: str) -> str:
@@ -168,7 +178,7 @@ def sanitize_text(text: str) -> str:
     if not text:
         return text
     out = text
-    for secret in sorted(_redactions, key=len, reverse=True):
+    for secret in _sorted_redactions_snapshot():
         if secret in out:
             out = out.replace(secret, _REDACTED)
     for pattern in _CREDENTIAL_PATTERNS:

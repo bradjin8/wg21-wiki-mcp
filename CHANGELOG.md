@@ -10,6 +10,11 @@ for the pre-1.0 API stability policy and deprecation timeline.
 
 ## [Unreleased]
 
+### Security
+- `log_safety.py`: guard the module-level `_redactions` registry with a lock;
+  `sanitize_text()` snapshots under the lock so concurrent register/clear cannot
+  raise or skip redactions on free-threaded Python 3.13+.
+
 ### Changed
 - SAML headless login (`_saml_login`): configurable IdP field names
   (`WIKI_SAML_USERNAME_FIELD`, `WIKI_SAML_PASSWORD_FIELD`) and per-step timeout

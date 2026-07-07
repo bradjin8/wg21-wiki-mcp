@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -279,6 +280,87 @@ class TestAuthFailureMessages:
         assert page_content not in caplog.text
         assert "title_hash=" in caplog.text
         cache.close()
+
+
+class TestRedactionsConcurrency:
+    def test_concurrent_register_clear_and_sanitize(self):
+        """Concurrent mutation and scrubbing raise no errors; registry stays functional."""
+        witness = "anchor-redaction-secret-xyz"
+        errors: list[BaseException] = []
+        start = threading.Barrier(4)
+
+        def register_volatile():
+            start.wait(timeout=5)
+            for i in range(200):
+                register_redactions(f"volatile-secret-{i:04d}-padding")
+
+        def clear_and_restore():
+            start.wait(timeout=5)
+            for _ in range(40):
+                clear_redactions()
+                register_redactions(witness)
+
+        def scrub_loop():
+            start.wait(timeout=5)
+            for i in range(400):
+                try:
+                    sanitize_text(f"leak volatile-secret-{i % 200:04d}-padding noise")
+                    sanitize_text("token=abc password=def")
+                except BaseException as exc:  # noqa: BLE001 - collect for assertion
+                    errors.append(exc)
+
+        threads = [
+            threading.Thread(target=register_volatile),
+            threading.Thread(target=register_volatile),
+            threading.Thread(target=clear_and_restore),
+            threading.Thread(target=scrub_loop),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+
+        assert not errors, errors
+        assert not any(thread.is_alive() for thread in threads)
+
+        post_check = "post-concurrency-check-secret"
+        register_redactions(post_check)
+        assert post_check not in sanitize_text(f"leak {post_check}")
+
+    def test_concurrent_register_does_not_drop_active_redactions(self):
+        """A registered witness stays redacted while other threads keep adding secrets."""
+        witness = "persistent-witness-secret-abc"
+        register_redactions(witness)
+        errors: list[BaseException] = []
+        start = threading.Barrier(3)
+
+        def register_more():
+            start.wait(timeout=5)
+            for i in range(300):
+                register_redactions(f"extra-secret-{i:04d}-suffix")
+
+        def scrub_witness():
+            start.wait(timeout=5)
+            probe = f"password={witness}"
+            for _ in range(500):
+                try:
+                    if witness in sanitize_text(probe):
+                        raise AssertionError("witness secret leaked during concurrent register")
+                except BaseException as exc:  # noqa: BLE001 - collect for assertion
+                    errors.append(exc)
+
+        threads = [
+            threading.Thread(target=register_more),
+            threading.Thread(target=register_more),
+            threading.Thread(target=scrub_witness),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+
+        assert not errors, errors
+        assert not any(thread.is_alive() for thread in threads)
 
 
 class TestLogSafetyFilterUnit:
