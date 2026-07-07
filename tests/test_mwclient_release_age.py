@@ -79,11 +79,32 @@ def test_hard_gate_passes_under_documented_threshold(monkeypatch: pytest.MonkeyP
     assert main(["--max-age-days", "730", "--fail-reason", "hard"]) == 0
 
 
-def test_review_gate_fails_over_twelve_months(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_review_gate_fails_over_twelve_months(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     old = (datetime.now(timezone.utc) - timedelta(days=400)).isoformat()
     _mock_pypi(monkeypatch, old)
 
     assert main(["--max-age-days", "365", "--fail-reason", "review"]) == 1
+    err = capsys.readouterr().err
+    assert "REVIEW TRIGGER" in err
+    assert "GATE MISCONFIGURED" not in err
+
+
+def test_lowered_review_threshold_reports_misconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Scratch-branch gate verification: sub-12-month breach is misconfiguration, not policy."""
+    age_days = 200
+    released = (datetime.now(timezone.utc) - timedelta(days=age_days)).isoformat()
+    _mock_pypi(monkeypatch, released)
+
+    assert main(["--max-age-days", "30", "--fail-reason", "review"]) == 1
+    err = capsys.readouterr().err
+    assert "GATE MISCONFIGURED" in err
+    assert "REVIEW TRIGGER" not in err
 
 
 def test_hard_gate_fails_over_twenty_four_months(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -117,3 +138,10 @@ def test_hard_gate_failure_message_distinguishes_policy_breach() -> None:
 def test_review_gate_failure_message() -> None:
     msg = _failure_message(fail_reason="review", age_days=400, max_age_days=365)
     assert "REVIEW TRIGGER" in msg
+    assert "GATE MISCONFIGURED" not in msg
+
+
+def test_review_gate_failure_message_misconfigured() -> None:
+    msg = _failure_message(fail_reason="review", age_days=200, max_age_days=30)
+    assert "GATE MISCONFIGURED" in msg
+    assert "REVIEW TRIGGER" not in msg

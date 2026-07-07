@@ -56,11 +56,18 @@ def _failure_message(
     max_age_days: int,
 ) -> str:
     if fail_reason == "review":
+        if age_days > _DOCUMENTED_REVIEW_AGE_DAYS:
+            return (
+                f"REVIEW TRIGGER: latest mwclient PyPI release is older than "
+                f"{max_age_days} days ({_DOCUMENTED_REVIEW_AGE_DAYS}-day quarterly review "
+                "threshold per docs/DEPENDENCY-RISK.md). "
+                "This step is advisory; schedule succession-plan review."
+            )
         return (
-            f"REVIEW TRIGGER: latest mwclient PyPI release is older than "
-            f"{max_age_days} days ({_DOCUMENTED_REVIEW_AGE_DAYS}-day quarterly review "
-            "threshold per docs/DEPENDENCY-RISK.md). "
-            "This step is advisory; schedule succession-plan review."
+            f"GATE MISCONFIGURED: release age {age_days} days exceeds custom "
+            f"--max-age-days {max_age_days} but not the documented "
+            f"{_DOCUMENTED_REVIEW_AGE_DAYS}-day review trigger. "
+            "Lowered thresholds are for gate verification only."
         )
 
     if age_days > _DOCUMENTED_HARD_AGE_DAYS:

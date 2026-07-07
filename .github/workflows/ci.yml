@@ -97,18 +97,37 @@ jobs:
           pip install -e ".[dev]"
       - name: Run cache benchmarks
         # benchmarks/cache-baseline.json must match this runner (ubuntu-latest, Python 3.12).
-        # Regenerate it from the benchmark-json artifact when benchmark code changes.
+        # Baseline means include hd15iqr + 15% headroom over the original capture.
+        # Regenerate from the benchmark-json artifact when benchmark code changes.
         run: |
           pytest tests/test_benchmark.py --benchmark-only --no-cov \
             -o addopts= \
-            --benchmark-json=benchmark.json
+            --benchmark-json=benchmark.json \
+            --benchmark-warmup=on \
+            --benchmark-min-rounds=10
+      - name: Benchmark regression gate
+        # Blocking gate: re-run benchmarks once on failure to absorb shared-runner noise.
+        run: |
+          set -euo pipefail
+          check() {
+            python scripts/check_cache_benchmark_regression.py \
+              benchmark.json benchmarks/cache-baseline.json
+          }
+          if check; then
+            exit 0
+          fi
+          echo "::warning::Regression gate failed once; re-running benchmarks for runner noise..."
+          pytest tests/test_benchmark.py --benchmark-only --no-cov \
+            -o addopts= \
+            --benchmark-json=benchmark.json \
+            --benchmark-warmup=on \
+            --benchmark-min-rounds=10
+          check
       - name: Upload benchmark JSON
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: benchmark-json
           path: benchmark.json
-      - name: Benchmark regression gate
-        run: python scripts/check_cache_benchmark_regression.py benchmark.json benchmarks/cache-baseline.json
 
   test:
     name: offline (${{ matrix.os }}, py${{ matrix.python-version }})

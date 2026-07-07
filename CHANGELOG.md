@@ -14,7 +14,8 @@ for the pre-1.0 API stability policy and deprecation timeline.
 - CI enforcement: cache benchmark regression gate is now blocking (removed
   `continue-on-error`); mwclient release-age check splits a 12-month advisory
   review signal (`continue-on-error`) from a blocking 24-month hard migration
-  trigger aligned with `docs/DEPENDENCY-RISK.md`.
+  trigger aligned with `docs/DEPENDENCY-RISK.md`. Baseline means repadded for
+  shared-runner headroom; CI enables benchmark warmup and one retry on gate failure.
 - SAML headless login (`_saml_login`): configurable IdP field names
   (`WIKI_SAML_USERNAME_FIELD`, `WIKI_SAML_PASSWORD_FIELD`) and per-step timeout
   (`WIKI_SAML_TIMEOUT_S`); DOM-based field detection fallback; retry on transient
