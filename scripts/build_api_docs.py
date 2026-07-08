@@ -193,7 +193,12 @@ def _tool_sections() -> list[str]:
                     ]
                 )
             for param_name, param in sig.parameters.items():
-                type_str = _type_name(hints.get(param_name, param.annotation))
+                if isinstance(param.annotation, str):
+                    # Prefer deferred annotation strings from source; get_type_hints()
+                    # can lose generic args on Python 3.10 (e.g. list[str] -> list).
+                    type_str = _escape_table_cell(param.annotation)
+                else:
+                    type_str = _type_name(hints.get(param_name, param.annotation))
                 if not type_str:
                     type_str = "Any"
                 if param.default is inspect.Parameter.empty:

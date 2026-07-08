@@ -35,6 +35,12 @@ def test_render_marks_generated_banner():
     assert "python scripts/build_api_docs.py" in md
 
 
+def test_render_preserves_generic_param_annotations():
+    """Deferred annotation strings must win over get_type_hints() on Python 3.10."""
+    md = render_api_md()
+    assert "| `groups` | `list[str] \\| None` | `None` |" in md
+
+
 def test_api_md_matches_generator():
     """Committed docs/API.md must match the generator (CI drift gate)."""
     if not _API_MD.is_file():
