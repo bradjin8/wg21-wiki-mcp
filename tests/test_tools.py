@@ -21,7 +21,7 @@ def _stale_outlink_fetched_at(ctx, *, extra_seconds: int = 3600) -> str:
 def _seed_stale_outlink_cache(ctx, title: str, links: list[str]) -> str:
     import json
 
-    key = tools.outlinks_cache_key(title)
+    key = tools._outlinks_cache_key(title)
     ctx.cache.put(
         requested_title=key,
         title=title,
@@ -376,13 +376,56 @@ def test_cached_outlinks_stale_fallback_on_timeout(fake_client, make_ctx, monkey
 
 
 def test_outlinks_lock_map_bounded(fake_client, make_ctx, monkeypatch):
+    import threading
+
     monkeypatch.setattr(tools, "_MAX_OUTLINKS_LOCK_ENTRIES", 2)
     ctx = make_ctx(fake_client)
     for i in range(4):
         fake_client.links[f"2026-06 Meeting {i}"] = []
-        fake_client.allpages = [{"title": f"2026-06 Meeting {i}", "ns": 0}]
-        tools._cached_page_outlinks(ctx, f"2026-06 Meeting {i}")
-    assert len(tools._outlinks_locks) <= 2
+
+    hold_ready = threading.Event()
+    hold_release = threading.Event()
+    in_gate = {"count": 0}
+    gate_lock = threading.Lock()
+    errors: list[BaseException] = []
+
+    def gated_page_outlinks(_ctx, _title, **kwargs):
+        with gate_lock:
+            in_gate["count"] += 1
+            if in_gate["count"] == 2:
+                hold_ready.set()
+        if not hold_release.wait(timeout=5):
+            raise TimeoutError("workers did not release gated outlink fetch in time")
+        return []
+
+    monkeypatch.setattr(tools, "_page_outlinks", gated_page_outlinks)
+
+    def worker(title: str) -> None:
+        try:
+            tools._cached_page_outlinks(ctx, title)
+        except BaseException as exc:
+            errors.append(exc)
+
+    def run_concurrent_pair(titles: tuple[str, str]) -> None:
+        hold_ready.clear()
+        hold_release.clear()
+        with gate_lock:
+            in_gate["count"] = 0
+
+        threads = [threading.Thread(target=worker, args=(title,)) for title in titles]
+        for thread in threads:
+            thread.start()
+        assert hold_ready.wait(timeout=5), "two workers never held outlink locks concurrently"
+        assert len(tools._outlinks_map.slots) <= 2
+        assert len(tools._outlinks_map.slots) == 2
+        hold_release.set()
+        for thread in threads:
+            thread.join(timeout=5)
+
+    run_concurrent_pair(("2026-06 Meeting 0", "2026-06 Meeting 1"))
+    run_concurrent_pair(("2026-06 Meeting 2", "2026-06 Meeting 3"))
+    assert not errors
+    assert len(tools._outlinks_map.slots) <= 2
 
 
 def test_cached_outlinks_raises_without_stale_on_timeout(fake_client, make_ctx, monkeypatch):
@@ -441,7 +484,7 @@ def test_cached_outlinks_stale_on_lock_contention(fake_client, make_ctx):
 
     ctx = make_ctx(fake_client)
     stale = ["2026-06 Alpha:Cached"]
-    key = tools.outlinks_cache_key("2026-06 Alpha")
+    key = tools._outlinks_cache_key("2026-06 Alpha")
     _seed_stale_outlink_cache(ctx, "2026-06 Alpha", stale)
 
     held = tools._acquire_outlinks_lock(key, deadline=None)
@@ -460,26 +503,26 @@ def test_cached_outlinks_stale_on_lock_contention(fake_client, make_ctx):
 
 def test_acquire_outlinks_lock_deadline_expired_no_leak():
     """Regression (A1): an already-exhausted deadline must not register a user."""
-    key = tools.outlinks_cache_key("2026-06 Expired")
+    key = tools._outlinks_cache_key("2026-06 Expired")
     with pytest.raises(FetchError, match="timed out"):
         tools._acquire_outlinks_lock(key, deadline=time.monotonic() - 1.0)
-    slot = tools._outlinks_locks.get(key)
+    slot = tools._outlinks_map.slots.get(key)
     assert slot is None or slot.users == 0
 
 
 def test_acquire_outlinks_lock_contention_no_leak():
     """Regression (A1): a lock-acquire timeout must roll back its user-count."""
 
-    key = tools.outlinks_cache_key("2026-06 Contended")
+    key = tools._outlinks_cache_key("2026-06 Contended")
     held = tools._acquire_outlinks_lock(key, deadline=None)
     try:
         with pytest.raises(FetchError, match="timed out"):
             tools._acquire_outlinks_lock(key, deadline=time.monotonic() + 0.05)
-        slot = tools._outlinks_locks.get(key)
+        slot = tools._outlinks_map.slots.get(key)
         assert slot is not None and slot.users == 1  # only the holder remains
     finally:
         tools._release_outlinks_lock(key, held)
-    slot = tools._outlinks_locks.get(key)
+    slot = tools._outlinks_map.slots.get(key)
     assert slot is None or slot.users == 0
 
 
