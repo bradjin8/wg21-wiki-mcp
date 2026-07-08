@@ -184,7 +184,7 @@ before upgrading a pinned version.
 
 ## Documentation
 
-- [docs/API.md](docs/API.md) - MCP tool reference (parameters, return types, stability).
+- [docs/API.md](docs/API.md) - MCP tool reference (generated from source; run `python scripts/build_api_docs.py` to update).
 - [STABILITY.md](STABILITY.md) - API stability tiers and deprecation policy (pre-1.0).
 - [docs/RUNBOOK.md](docs/RUNBOOK.md) - MCP host setup, troubleshooting, and agent tool-selection guide.
 - [docs/FIRST_PYPI_PUBLISH.md](docs/FIRST_PYPI_PUBLISH.md) - one-time Trusted Publisher setup for the first PyPI release.
