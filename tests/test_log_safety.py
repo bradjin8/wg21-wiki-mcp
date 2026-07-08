@@ -291,30 +291,44 @@ class TestRedactionsConcurrency:
     """
 
     def test_concurrent_register_clear_and_sanitize(self):
-        """Concurrent mutation and scrubbing raise no errors; registry stays functional."""
+        """Concurrent mutation and scrubbing raise no errors; witness stays literally redacted when live."""
         witness = "anchor-redaction-secret-xyz"
+        register_redactions(witness)
+        probe = f"leak {witness} trailer"
         errors: list[BaseException] = []
+        witness_live = threading.Event()
+        witness_live.set()
         start = threading.Barrier(4)
 
-        def register_volatile():
-            start.wait(timeout=5)
-            for i in range(200):
-                register_redactions(f"volatile-secret-{i:04d}-padding")
+        def register_volatile() -> None:
+            try:
+                start.wait(timeout=5)
+                for i in range(200):
+                    register_redactions(f"volatile-secret-{i:04d}-padding")
+            except BaseException as exc:  # noqa: BLE001 - collect for assertion
+                errors.append(exc)
 
-        def clear_and_restore():
-            start.wait(timeout=5)
-            for _ in range(40):
-                clear_redactions()
-                register_redactions(witness)
+        def clear_and_restore() -> None:
+            try:
+                start.wait(timeout=5)
+                for _ in range(40):
+                    witness_live.clear()
+                    clear_redactions()
+                    register_redactions(witness)
+                    witness_live.set()
+            except BaseException as exc:  # noqa: BLE001 - collect for assertion
+                errors.append(exc)
 
-        def scrub_loop():
-            start.wait(timeout=5)
-            for i in range(400):
-                try:
+        def scrub_loop() -> None:
+            try:
+                start.wait(timeout=5)
+                for i in range(400):
                     sanitize_text(f"leak volatile-secret-{i % 200:04d}-padding noise")
                     sanitize_text("token=abc password=def")
-                except BaseException as exc:  # noqa: BLE001 - collect for assertion
-                    errors.append(exc)
+                    if witness_live.is_set() and witness in sanitize_text(probe):
+                        raise AssertionError("witness secret leaked during concurrent clear/register")
+            except BaseException as exc:  # noqa: BLE001 - collect for assertion
+                errors.append(exc)
 
         threads = [
             threading.Thread(target=register_volatile),
@@ -329,6 +343,7 @@ class TestRedactionsConcurrency:
 
         assert not errors, errors
         assert not any(thread.is_alive() for thread in threads)
+        assert witness not in sanitize_text(f"leak {witness}")
 
         post_check = "post-concurrency-check-secret"
         register_redactions(post_check)
@@ -342,19 +357,22 @@ class TestRedactionsConcurrency:
         start = threading.Barrier(3)
         probe = f"leak {witness} trailer"
 
-        def register_more():
-            start.wait(timeout=5)
-            for i in range(300):
-                register_redactions(f"extra-secret-{i:04d}-suffix")
+        def register_more() -> None:
+            try:
+                start.wait(timeout=5)
+                for i in range(300):
+                    register_redactions(f"extra-secret-{i:04d}-suffix")
+            except BaseException as exc:  # noqa: BLE001 - collect for assertion
+                errors.append(exc)
 
-        def scrub_witness():
-            start.wait(timeout=5)
-            for _ in range(500):
-                try:
+        def scrub_witness() -> None:
+            try:
+                start.wait(timeout=5)
+                for _ in range(500):
                     if witness in sanitize_text(probe):
                         raise AssertionError("witness secret leaked during concurrent register")
-                except BaseException as exc:  # noqa: BLE001 - collect for assertion
-                    errors.append(exc)
+            except BaseException as exc:  # noqa: BLE001 - collect for assertion
+                errors.append(exc)
 
         threads = [
             threading.Thread(target=register_more),
