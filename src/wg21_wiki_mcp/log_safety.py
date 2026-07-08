@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -24,6 +25,8 @@ _MIN_SECRET_LEN = 4
 
 # Runtime registry of literal values that must never appear in logs.
 _redactions: set[str] = set()
+_redactions_snapshot: tuple[str, ...] = ()
+_redactions_lock = threading.Lock()
 
 # Patterns that often precede credential material in exception or debug text.
 _CREDENTIAL_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -145,11 +148,30 @@ def auth_error_mcp_message(exc: BaseException) -> str:
     return AUTH_FAILURE_MESSAGE
 
 
+def _rebuild_redactions_snapshot_locked() -> None:
+    """Refresh longest-first snapshot; caller must hold ``_redactions_lock``."""
+    global _redactions_snapshot
+    _redactions_snapshot = tuple(sorted(_redactions, key=len, reverse=True))
+
+
+def _sorted_redactions_snapshot() -> tuple[str, ...]:
+    """Return the cached redactions snapshot (longest-first)."""
+    with _redactions_lock:
+        return _redactions_snapshot
+
+
 def register_redactions(*values: str | None) -> None:
     """Register literal strings to scrub from every log record."""
-    for value in values:
-        if value and len(value) >= _MIN_SECRET_LEN:
-            _redactions.add(value)
+    with _redactions_lock:
+        changed = False
+        for value in values:
+            if value and len(value) >= _MIN_SECRET_LEN:
+                before = len(_redactions)
+                _redactions.add(value)
+                if len(_redactions) != before:
+                    changed = True
+        if changed:
+            _rebuild_redactions_snapshot_locked()
 
 
 def register_config_secrets(config: Config) -> None:
@@ -160,7 +182,9 @@ def register_config_secrets(config: Config) -> None:
 
 def clear_redactions() -> None:
     """Clear the redaction registry (for tests)."""
-    _redactions.clear()
+    with _redactions_lock:
+        _redactions.clear()
+        _rebuild_redactions_snapshot_locked()
 
 
 def sanitize_text(text: str) -> str:
@@ -168,7 +192,7 @@ def sanitize_text(text: str) -> str:
     if not text:
         return text
     out = text
-    for secret in sorted(_redactions, key=len, reverse=True):
+    for secret in _sorted_redactions_snapshot():
         if secret in out:
             out = out.replace(secret, _REDACTED)
     for pattern in _CREDENTIAL_PATTERNS:

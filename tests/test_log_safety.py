@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -279,6 +280,113 @@ class TestAuthFailureMessages:
         assert page_content not in caplog.text
         assert "title_hash=" in caplog.text
         cache.close()
+
+
+class TestRedactionsConcurrency:
+    """Barrier-synchronized stress tests for the redaction registry.
+
+    CI exercises CPython 3.13 with the GIL, not the free-threaded ``python3.13t``
+    build. These tests prove lock discipline under concurrent threads; the lock
+    + immutable snapshot design provides structural safety on 3.13t as well.
+    """
+
+    def test_concurrent_register_clear_and_sanitize(self):
+        """Concurrent mutation and scrubbing raise no errors; witness stays literally redacted when live."""
+        witness = "anchor-redaction-secret-xyz"
+        register_redactions(witness)
+        probe = f"leak {witness} trailer"
+        errors: list[BaseException] = []
+        witness_live = threading.Event()
+        witness_live.set()
+        start = threading.Barrier(4)
+
+        def register_volatile() -> None:
+            try:
+                start.wait(timeout=5)
+                for i in range(200):
+                    register_redactions(f"volatile-secret-{i:04d}-padding")
+            except BaseException as exc:  # noqa: BLE001 - collect for assertion
+                errors.append(exc)
+
+        def clear_and_restore() -> None:
+            try:
+                start.wait(timeout=5)
+                for _ in range(40):
+                    witness_live.clear()
+                    clear_redactions()
+                    register_redactions(witness)
+                    witness_live.set()
+            except BaseException as exc:  # noqa: BLE001 - collect for assertion
+                errors.append(exc)
+
+        def scrub_loop() -> None:
+            try:
+                start.wait(timeout=5)
+                for i in range(400):
+                    sanitize_text(f"leak volatile-secret-{i % 200:04d}-padding noise")
+                    sanitize_text("token=abc password=def")
+                    if witness_live.is_set() and witness in sanitize_text(probe):
+                        raise AssertionError("witness secret leaked during concurrent clear/register")
+            except BaseException as exc:  # noqa: BLE001 - collect for assertion
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=register_volatile),
+            threading.Thread(target=register_volatile),
+            threading.Thread(target=clear_and_restore),
+            threading.Thread(target=scrub_loop),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+
+        assert not errors, errors
+        assert not any(thread.is_alive() for thread in threads)
+        assert witness not in sanitize_text(f"leak {witness}")
+
+        post_check = "post-concurrency-check-secret"
+        register_redactions(post_check)
+        assert post_check not in sanitize_text(f"leak {post_check}")
+
+    def test_concurrent_register_does_not_drop_active_redactions(self):
+        """A registered witness stays literally redacted while other threads keep adding secrets."""
+        witness = "persistent-witness-secret-abc"
+        register_redactions(witness)
+        errors: list[BaseException] = []
+        start = threading.Barrier(3)
+        probe = f"leak {witness} trailer"
+
+        def register_more() -> None:
+            try:
+                start.wait(timeout=5)
+                for i in range(300):
+                    register_redactions(f"extra-secret-{i:04d}-suffix")
+            except BaseException as exc:  # noqa: BLE001 - collect for assertion
+                errors.append(exc)
+
+        def scrub_witness() -> None:
+            try:
+                start.wait(timeout=5)
+                for _ in range(500):
+                    if witness in sanitize_text(probe):
+                        raise AssertionError("witness secret leaked during concurrent register")
+            except BaseException as exc:  # noqa: BLE001 - collect for assertion
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=register_more),
+            threading.Thread(target=register_more),
+            threading.Thread(target=scrub_witness),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+
+        assert not errors, errors
+        assert not any(thread.is_alive() for thread in threads)
+        assert witness not in sanitize_text(f"leak {witness}")
 
 
 class TestLogSafetyFilterUnit:

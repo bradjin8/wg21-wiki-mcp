@@ -10,6 +10,12 @@ for the pre-1.0 API stability policy and deprecation timeline.
 
 ## [Unreleased]
 
+### Security
+- `log_safety.py`: guard the module-level `_redactions` registry with a lock;
+  `sanitize_text()` snapshots under the lock so concurrent register/clear cannot
+  raise or skip redactions. Structural safety under free-threaded Python 3.13+;
+  CI runs CPython 3.13 (GIL), not `python3.13t`.
+
 ### Changed
 - CI enforcement: cache benchmark regression gate is now blocking (removed
   `continue-on-error`); mwclient release-age check splits a 12-month advisory
