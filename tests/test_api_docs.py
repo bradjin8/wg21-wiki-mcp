@@ -20,6 +20,7 @@ sys.modules[_spec.name] = _build_mod
 _spec.loader.exec_module(_build_mod)
 EXPECTED_TOOLS = _build_mod.EXPECTED_TOOLS
 render_api_md = _build_mod.render_api_md
+_normalize_newlines = _build_mod._normalize_newlines
 
 
 def test_render_includes_all_mcp_tools():
@@ -38,10 +39,8 @@ def test_api_md_matches_generator():
     """Committed docs/API.md must match the generator (CI drift gate)."""
     if not _API_MD.is_file():
         pytest.skip("docs/API.md not present")
-    generated = render_api_md()
-    existing = _API_MD.read_text(encoding="utf-8").replace("\r\n", "\n")
-    if not existing.endswith("\n"):
-        existing += "\n"
+    generated = _normalize_newlines(render_api_md())
+    existing = _normalize_newlines(_API_MD.read_text(encoding="utf-8"))
     assert existing == generated
 
 
