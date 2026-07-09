@@ -79,7 +79,7 @@ List the wiki's content namespaces and their numeric ids.
 
 **Parameters:** none.
 
-**Returns:** `NamespaceInfo` — A MediaWiki content namespace: its numeric id and names.
+**Returns:** `list[NamespaceInfo]` — A MediaWiki content namespace: its numeric id and names.
 
 ## `list_pages`
 

@@ -97,9 +97,15 @@ def _return_summary(return_type: Any) -> str:
     origin = get_origin(return_type)
     if origin is list:
         args = get_args(return_type)
+        type_str = _type_name(return_type)
         if args:
-            return _model_summary(args[0])
-        return "list"
+            inner = args[0]
+            if isinstance(inner, type):
+                doc = _first_paragraph(inner.__doc__)
+                if doc:
+                    return f"`{type_str}` — {doc}"
+            return f"`{type_str}`"
+        return "`list`"
     return _model_summary(return_type)
 
 

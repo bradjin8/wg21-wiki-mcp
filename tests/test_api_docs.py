@@ -41,6 +41,12 @@ def test_render_preserves_generic_param_annotations():
     assert "| `groups` | `list[str] \\| None` | `None` |" in md
 
 
+def test_render_list_return_type_includes_container():
+    """list[T] returns must show the list container, not just the element type."""
+    md = render_api_md()
+    assert "**Returns:** `list[NamespaceInfo]` — A MediaWiki content namespace: its numeric id and names." in md
+
+
 def test_api_md_matches_generator():
     """Committed docs/API.md must match the generator (CI drift gate)."""
     if not _API_MD.is_file():
