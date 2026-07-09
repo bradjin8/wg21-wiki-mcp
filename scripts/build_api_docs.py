@@ -92,8 +92,26 @@ def _first_paragraph(doc: str | None) -> str:
     return text.split("\n\n", maxsplit=1)[0].replace("\n", " ")
 
 
-def _return_summary(return_type: Any) -> str:
+def _doc_from_annotation_string(annotation: str) -> str:
+    """Resolve a model docstring from a deferred annotation string."""
+    inner = annotation.strip()
+    if inner.startswith("list[") and inner.endswith("]"):
+        inner = inner[5:-1].strip()
+    model_type = getattr(models, inner, None)
+    if isinstance(model_type, type):
+        return _first_paragraph(model_type.__doc__)
+    return ""
+
+
+def _return_summary(return_type: Any, return_annotation: Any = inspect.Signature.empty) -> str:
     """One-line summary for a tool return type."""
+    if isinstance(return_annotation, str):
+        type_str = _escape_table_cell(return_annotation)
+        doc = _doc_from_annotation_string(return_annotation)
+        if doc:
+            return f"`{type_str}` — {doc}"
+        return f"`{type_str}`"
+
     origin = get_origin(return_type)
     if origin is list:
         args = get_args(return_type)
@@ -218,7 +236,7 @@ def _tool_sections() -> list[str]:
                     lines.append(f"| `{param_name}` | `{type_str}` | {default_str} |")
             lines.append("")
 
-        lines.append(f"**Returns:** {_return_summary(return_type)}")
+        lines.append(f"**Returns:** {_return_summary(return_type, sig.return_annotation)}")
         lines.append("")
         sections.append("\n".join(lines))
     return sections

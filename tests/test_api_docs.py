@@ -47,6 +47,13 @@ def test_render_list_return_type_includes_container():
     assert "**Returns:** `list[NamespaceInfo]` — A MediaWiki content namespace: its numeric id and names." in md
 
 
+def test_return_summary_uses_deferred_annotation_on_py310_hints():
+    """Deferred return strings must win when get_type_hints() loses generic args."""
+    assert _build_mod._return_summary(list, "list[NamespaceInfo]") == (
+        "`list[NamespaceInfo]` — A MediaWiki content namespace: its numeric id and names."
+    )
+
+
 def test_api_md_matches_generator():
     """Committed docs/API.md must match the generator (CI drift gate)."""
     if not _API_MD.is_file():
