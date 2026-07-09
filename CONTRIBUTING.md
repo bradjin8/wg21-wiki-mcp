@@ -34,8 +34,16 @@ hygiene); the test suite runs via `pytest`/CI, not in the commit hook.
 ```bash
 ruff check src tests        # lint
 mypy src                    # type-check
+python scripts/build_api_docs.py --check  # API reference matches source
 pytest -m "not live and not latency_gate"  # offline tests + 95% coverage gate
 pytest -m latency_gate      # meeting-time load/latency gate (ubuntu/py3.12 in CI)
+```
+
+Regenerate [docs/API.md](docs/API.md) after changing MCP tool signatures,
+docstrings, or public response models:
+
+```bash
+python scripts/build_api_docs.py
 ```
 
 The offline suite mocks the network with synthetic fixtures and needs no
@@ -104,6 +112,8 @@ transport evaluation and the opt-in prototype.
 
 - Keep changes focused; add tests for new behavior and keep coverage >= 90%.
 - Run `pre-commit run --all-files` and the offline suite before opening a PR.
+- When MCP tool signatures, docstrings, or public response models change, run
+  `python scripts/build_api_docs.py` and commit the updated `docs/API.md`.
 - Update `CHANGELOG.md` for user-visible changes (use `### Deprecated` when
   marking APIs for removal; see [STABILITY.md](STABILITY.md)).
 

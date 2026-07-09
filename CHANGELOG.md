@@ -31,8 +31,13 @@ for the pre-1.0 API stability policy and deprecation timeline.
   step logging.
 - Tighten `mwclient` runtime pin to `>=0.11.0,<0.12` so unexpected minor/major
   releases cannot land silently via Dependabot.
+- `docs/API.md` is now generated from source (`scripts/build_api_docs.py`) instead
+  of hand-maintained per-tool tables.
 
 ### Added
+- Generated MCP API reference (`scripts/build_api_docs.py`, `docs/API.md`) built from
+  tool docstrings, type hints, and Pydantic models; CI fails when the committed
+  reference drifts from source.
 - Cache throughput benchmarks (`tests/test_benchmark.py`, `pytest-benchmark`) with
   CI JSON artifacts and a regression gate against `benchmarks/cache-baseline.json`
   (`scripts/check_cache_benchmark_regression.py`). See the `### Changed` entry above
@@ -43,7 +48,6 @@ for the pre-1.0 API stability policy and deprecation timeline.
 - `docs/DEPENDENCY-RISK.md`: mwclient upstream assessment, alternatives evaluation,
   abstraction boundary, and succession plan; CI PyPI release-age check
   (`scripts/check_mwclient_release_age.py`, `dependency health` job).
-- `docs/API.md`: rendered MCP tool reference (parameters, return types, programmatic access).
 - `docs/FIRST_PYPI_PUBLISH.md`: one-time Trusted Publisher checklist for the first PyPI release.
 - Meeting-time **latency gate** CI step on `ubuntu-latest` / Python 3.12 (`pytest -m latency_gate`).
 - Thread-safe `get_context()` / lifespan shutdown via `_state_lock` in `server.py`.

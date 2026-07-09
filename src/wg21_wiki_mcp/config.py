@@ -8,6 +8,7 @@ Credential values are held in memory only and never logged.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -36,10 +37,13 @@ __all__ = [
     "ConfigError",
 ]
 
+_load_dotenv: Callable[..., bool] | None = None
 try:  # python-dotenv is optional; absence simply means "no .env convenience".
-    from dotenv import load_dotenv as _load_dotenv
+    from dotenv import load_dotenv as _load_dotenv_impl
+
+    _load_dotenv = _load_dotenv_impl
 except ImportError:  # pragma: no cover - dotenv is a normal dependency
-    _load_dotenv = None  # type: ignore[assignment]
+    pass
 
 
 # The WG21 committee wiki has a single canonical base URL; it is centralized

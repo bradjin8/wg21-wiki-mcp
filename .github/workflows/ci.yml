@@ -78,6 +78,8 @@ jobs:
           pip install -e ".[dev]"
       - name: Run pre-commit
         run: pre-commit run --all-files
+      - name: Verify API reference is current
+        run: python scripts/build_api_docs.py --check
 
   benchmark:
     name: cache benchmark
@@ -157,6 +159,9 @@ jobs:
         run: ruff check src tests
       - name: Type-check (mypy)
         run: mypy src
+      - name: Verify API reference is current
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: python scripts/build_api_docs.py --check
       - name: Tests + coverage gate (offline)
         run: pytest -m "not live and not latency_gate"
       - name: Meeting-time latency gate
