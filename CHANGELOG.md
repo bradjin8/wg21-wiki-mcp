@@ -11,6 +11,11 @@ for the pre-1.0 API stability policy and deprecation timeline.
 ## [Unreleased]
 
 ### Security
+- `config.py`: `Credentials.password` is now `field(repr=False)` so the plaintext
+  password is excluded from `repr()`/`print()`/debugger output; because `Config`
+  nests `Credentials`, `repr(Config(...))` no longer leaks it either. Complements
+  the log-redaction layer, which does not cover `repr`. No runtime behavior change;
+  the value remains accessible via attribute access.
 - `log_safety.py`: guard the module-level `_redactions` registry with a lock;
   `sanitize_text()` snapshots under the lock so concurrent register/clear cannot
   raise or skip redactions. Structural safety under free-threaded Python 3.13+;

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from wg21_wiki_mcp.config import WIKI_BASE_URL, Config, ConfigError
+from wg21_wiki_mcp.config import WIKI_BASE_URL, Config, ConfigError, Credentials
 
 _KEYS = [
     "WIKI_BOT_USERNAME",
@@ -126,3 +126,18 @@ def test_invalid_http_port_falls_back(monkeypatch):
     monkeypatch.setenv("WG21_HTTP_PORT", "not-a-port")
     cfg = Config.from_env(load_env_file=False)
     assert cfg.http_port == 8000
+
+
+def test_password_not_in_repr(monkeypatch):
+    # Secrets must not leak via repr()/print()/debugger output.
+    secret = "s3cr3t-p@ssw0rd"
+    creds = Credentials(label="bot", username="Acct@bot", password=secret)
+    assert secret not in repr(creds)
+    assert creds.password == secret  # value is still accessible
+
+    monkeypatch.setenv("WIKI_BOT_USERNAME", "Acct@bot")
+    monkeypatch.setenv("WIKI_BOT_PASSWORD", secret)
+    monkeypatch.setenv("WIKI_USER_USERNAME", "Acct")
+    monkeypatch.setenv("WIKI_USER_PASSWORD", secret)
+    cfg = Config.from_env(load_env_file=False)
+    assert secret not in repr(cfg)

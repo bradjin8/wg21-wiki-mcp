@@ -98,7 +98,7 @@ class Credentials:
 
     label: str  # "bot" or "user"
     username: str
-    password: str
+    password: str = field(repr=False)  # keep secrets out of repr/print/debug output
 
 
 @dataclass(frozen=True)
