@@ -34,6 +34,24 @@ def decode_cursor(cursor: str | None) -> dict:
     return value
 
 
+def cursor_offset(cursor: str | None, *, default: int = 0) -> int:
+    """Return a non-negative integer offset from an opaque cursor payload.
+
+    Raises:
+        McpError: if the cursor envelope is malformed or ``o`` is not a
+            non-negative integer.
+    """
+    payload = decode_cursor(cursor)
+    if "o" not in payload:
+        return default
+    raw = payload["o"]
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise McpError(ErrorData(code=INVALID_PARAMS, message="Invalid cursor offset."))
+    if raw < 0:
+        raise McpError(ErrorData(code=INVALID_PARAMS, message="Invalid cursor offset."))
+    return raw
+
+
 def _floor_utf8_boundary(data: bytes, index: int) -> int:
     """Move ``index`` left to the start of a UTF-8 character (or 0)."""
     if index >= len(data):

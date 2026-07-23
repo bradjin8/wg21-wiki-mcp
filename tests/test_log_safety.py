@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 from unittest.mock import MagicMock, patch
 
@@ -61,6 +62,17 @@ class TestSanitizeText:
         bearer = sanitize_text("Authorization: Bearer mytoken123")
         assert "mytoken123" not in bearer
         assert "[REDACTED]" in bearer
+        bare_bearer = sanitize_text("Use Bearer mytoken123 here")
+        assert "mytoken123" not in bare_bearer
+        cookie = sanitize_text("Cookie: session=abc123; path=/")
+        assert "abc123" not in cookie
+        assert "[REDACTED]" in cookie
+
+    def test_redacts_multiline_authorization_header(self):
+        text = "Authorization: Bearer secret-token\nX-Other: value"
+        out = sanitize_text(text)
+        assert "secret-token" not in out
+        assert "X-Other: value" in out
 
     def test_ignores_short_secrets(self):
         register_redactions("abc")
@@ -180,6 +192,22 @@ class TestLogSafetyFilter:
         logger = get_logger("fetch")
         logger.warning("lock issue: %s", secret)
 
+        assert secret not in caplog.text
+        assert "[REDACTED]" in caplog.text
+
+    def test_get_logger_filter_is_idempotent(self):
+        logger = get_logger("test.idempotent")
+        filter_count = sum(1 for filt in logger.filters if isinstance(filt, LogSafetyFilter))
+        again = get_logger("test.idempotent")
+        assert again is logger
+        assert filter_count == 1
+        assert sum(1 for filt in again.filters if isinstance(filt, LogSafetyFilter)) == 1
+
+    def test_raw_stdlib_logger_under_package_is_redacted(self, caplog):
+        secret = "raw-stdlib-secret-value"
+        register_redactions(secret)
+        caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp.raw_test")
+        logging.getLogger("wg21_wiki_mcp.raw_test").warning("leak %s", secret)
         assert secret not in caplog.text
         assert "[REDACTED]" in caplog.text
 
@@ -443,3 +471,42 @@ class TestLogSafetyFilterUnit:
         )
         assert LogSafetyFilter().filter(record) is True
         assert record.msg == 12345
+
+    def test_filter_scrubs_nested_args(self):
+        register_redactions("nested-secret-value")
+        record = logging.LogRecord(
+            name="wg21_wiki_mcp.test",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=1,
+            msg="nested %(outer)s",
+            args=(),
+            exc_info=None,
+        )
+        record.args = ({"outer": {"inner": "nested-secret-value"}},)
+        assert LogSafetyFilter().filter(record) is True
+        assert record.args == ({"outer": {"inner": "[REDACTED]"}},)
+
+    def test_filter_scrubs_exc_info_and_exc_text(self):
+        secret = "exc-secret-password"
+        register_redactions(secret)
+        record = logging.LogRecord(
+            name="wg21_wiki_mcp.test",
+            level=logging.ERROR,
+            pathname=__file__,
+            lineno=1,
+            msg="boom",
+            args=(),
+            exc_info=None,
+        )
+        try:
+            raise ValueError(f"password={secret}")
+        except ValueError:
+            record.exc_info = sys.exc_info()
+        record.exc_text = f"Traceback...\npassword={secret}"
+        assert LogSafetyFilter().filter(record) is True
+        formatter = logging.Formatter()
+        formatted = formatter.formatException(record.exc_info)
+        assert secret not in formatted
+        assert secret not in record.exc_text
+        assert "[REDACTED]" in record.exc_text

@@ -41,7 +41,7 @@ from .models import (
     SessionBundle,
     WikiStatus,
 )
-from .pagination import chunk_utf8, decode_cursor, encode_cursor
+from .pagination import chunk_utf8, cursor_offset, decode_cursor, encode_cursor
 from .wikitext import extract_iso_slots, has_agenda_signal
 
 logger = get_logger("tools")
@@ -221,7 +221,7 @@ def search_wiki(
     for verbatim content.
     """
     limit = _clamp(limit, 1, _MAX_LIST_LIMIT)
-    offset = int(decode_cursor(cursor).get("o", 0))
+    offset = cursor_offset(cursor)
     resp = ctx.client.search(query, limit=limit, namespace=namespace, offset=offset)
     search = resp.get("query", {}).get("search", [])
     hits = [
@@ -260,7 +260,7 @@ def get_page(
         PageNotFound: if the page does not exist.
     """
     max_bytes = _clamp(max_bytes, 1024, 256 * 1024)
-    start = int(decode_cursor(cursor).get("o", 0))
+    start = cursor_offset(cursor)
 
     if section is not None:
         outcome = ctx.fetcher.get_page_section(
@@ -377,9 +377,15 @@ def list_meetings(
     limit: int = 10,
     cursor: str | None = None,
 ) -> MeetingList:
-    """List discovered meetings (newest first); flags the active meeting."""
+    """List discovered meetings (newest first); flags the active meeting.
+
+    Pagination uses a numeric offset into the meeting list recomputed on each
+    request. If ns0 meeting titles are added or removed between pages, later
+    pages may skip or repeat entries; prefer a small ``limit`` or restart from
+    the first page when the wiki changes during pagination.
+    """
     limit = _clamp(limit, 1, _MAX_LIST_LIMIT)
-    offset = int(decode_cursor(cursor).get("o", 0))
+    offset = cursor_offset(cursor)
     all_meetings = _discover_meetings(ctx)
     active = all_meetings[0] if (all_meetings and ctx.calendar.is_meeting_active()) else None
     window = all_meetings[offset : offset + limit]

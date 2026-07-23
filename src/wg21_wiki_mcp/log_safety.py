@@ -15,7 +15,9 @@ from __future__ import annotations
 import logging
 import re
 import threading
-from typing import TYPE_CHECKING
+from collections.abc import Mapping
+from types import TracebackType
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from .config import Config
@@ -34,8 +36,13 @@ _CREDENTIAL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)(passwd\s*[=:]\s*)\S+"),
     re.compile(r"(?i)(token\s*[=:]\s*)\S+"),
     re.compile(r"(?i)(secret\s*[=:]\s*)\S+"),
-    re.compile(r"(?i)(authorization\s*:\s*).+"),
+    re.compile(r"(?is)(authorization\s*:\s*).+?(?:\r?\n(?!\s)|\Z)"),
+    re.compile(r"(?i)(api[_-]?key\s*[=:]\s*)\S+"),
     re.compile(r"(?i)(apikey\s*[=:]\s*)\S+"),
+    re.compile(r"(?i)(session\s*[=:]\s*)\S+"),
+    re.compile(r"(?is)(set-cookie\s*:\s*).+?(?:\r?\n(?!\s)|\Z)"),
+    re.compile(r"(?is)(cookie\s*:\s*).+?(?:\r?\n(?!\s)|\Z)"),
+    re.compile(r"(?i)(\bBearer\s+)\S+"),
 )
 
 AUTH_FAILURE_MESSAGE = (
@@ -224,6 +231,39 @@ def auth_path_failure_label(cred_label: str, exc: BaseException) -> str:
     return f"{cred_label}: {type(exc).__name__}"
 
 
+def _sanitize_log_value(value: object) -> object:
+    """Recursively redact strings inside log-format argument structures."""
+    if isinstance(value, str):
+        return sanitize_text(value)
+    if isinstance(value, Mapping):
+        return {key: _sanitize_log_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return tuple(_sanitize_log_value(item) for item in value)
+    if isinstance(value, list):
+        return [_sanitize_log_value(item) for item in value]
+    return value
+
+
+def _sanitize_exc_info(
+    exc_info: tuple[type[BaseException], BaseException, TracebackType | None],
+) -> tuple[type[BaseException], BaseException, TracebackType | None]:
+    """Return ``exc_info`` with the exception message scrubbed for credential leaks."""
+    exc_type, exc_value, exc_tb = exc_info
+    if exc_value is None:
+        return exc_info
+    summary = safe_exception_summary(exc_value)
+    if ": " in summary:
+        message = summary.split(": ", 1)[1]
+    else:
+        message = summary
+    try:
+        sanitized_exc = exc_type(message)
+    except Exception:  # noqa: BLE001 - fall back to mutating args on the live instance
+        sanitized_exc = exc_value
+        sanitized_exc.args = (message,)
+    return exc_type, sanitized_exc, exc_tb
+
+
 class LogSafetyFilter(logging.Filter):
     """Scrub credential values and registered content from log records."""
 
@@ -234,18 +274,16 @@ class LogSafetyFilter(logging.Filter):
         if record.args:
             args = record.args
             if isinstance(args, dict):
-                record.args = {
-                    key: sanitize_text(value) if isinstance(value, str) else value for key, value in args.items()
-                }
+                record.args = cast(Mapping[str, object], _sanitize_log_value(args))
             elif isinstance(args, tuple):
                 if len(args) == 1 and isinstance(args[0], dict):
-                    mapping = args[0]
-                    record.args = (
-                        {
-                            key: sanitize_text(value) if isinstance(value, str) else value
-                            for key, value in mapping.items()
-                        },
-                    )
+                    record.args = (cast(Mapping[str, object], _sanitize_log_value(args[0])),)
                 else:
-                    record.args = tuple(sanitize_text(arg) if isinstance(arg, str) else arg for arg in args)
+                    record.args = tuple(_sanitize_log_value(arg) for arg in args)
+        if record.exc_info:
+            exc_type, exc_value, exc_tb = record.exc_info
+            if exc_type is not None and exc_value is not None:
+                record.exc_info = _sanitize_exc_info((exc_type, exc_value, exc_tb))
+        if isinstance(record.exc_text, str):
+            record.exc_text = sanitize_text(record.exc_text)
         return True

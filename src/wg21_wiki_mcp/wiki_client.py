@@ -36,7 +36,6 @@ _AUTH_ERROR_CODES = frozenset({"readapidenied", "assertuserfailed", "notloggedin
 _BACKOFF_CODES = frozenset({"maxlag", "ratelimited"})
 _MAX_RETRIES = 6
 _MAX_TITLES_PER_BATCH = 50  # safe limit for accounts without apihighlimits
-_SAML_TIMEOUT_S = 30
 _SAML_MAX_RETRIES = 2
 _TRANSIENT_HTTP_CODES = frozenset(range(500, 600))
 _UNSET_TIMEOUT = object()
@@ -323,6 +322,19 @@ class WikiClient:
             max_lag=5,
         )
 
+    @staticmethod
+    def _close_site(site: mwclient.Site | None) -> None:
+        """Close one mwclient site handle (hygiene; errors propagate to caller)."""
+        if site is not None:
+            site.connection.close()
+
+    def _replace_site(self, site: mwclient.Site) -> None:
+        """Install a new site handle, closing any prior session first."""
+        old = self._site
+        self._site = site
+        if old is not None and old is not site:
+            self._close_site(old)
+
     def _login_with(self, cred: Credentials, *, deadline: float | None = None) -> None:
         timeout_remaining(deadline, on_exceeded=API_TIMEOUT_MSG)
         if cred.label == "bot":
@@ -363,14 +375,14 @@ class WikiClient:
         site = self._new_site()
         with self._site_request_timeout(site, deadline):
             site.login(cred.username, cred.password)
-        self._site = site
+        self._replace_site(site)
 
     def _user_login(self, cred: Credentials, *, deadline: float | None = None) -> None:
         self._timeout_remaining(deadline)
         site = self._new_site()
         # Try local clientlogin first (works only if the wiki allows local login).
         if self._try_clientlogin(site, cred, deadline=deadline):
-            self._site = site
+            self._replace_site(site)
             return
         # Fall back to the headless SimpleSAMLphp web-SSO flow.
         try:
@@ -381,7 +393,7 @@ class WikiClient:
             site.site_init()
             if not self._is_authenticated(site):
                 raise AuthError("SAML login completed but the API still sees an anonymous session.")
-        self._site = site
+        self._replace_site(site)
 
     def _try_clientlogin(self, site: mwclient.Site, cred: Credentials, *, deadline: float | None = None) -> bool:
         self._timeout_remaining(deadline)
@@ -770,8 +782,7 @@ class WikiClient:
             return
         with self._lock.write():
             try:
-                if self._site is not None:
-                    self._site.connection.close()
+                self._close_site(self._site)
             finally:
                 self._site = None
                 self._active = None

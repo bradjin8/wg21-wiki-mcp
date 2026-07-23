@@ -41,7 +41,12 @@ class FakeSite:
                 raise ConnectionError("no network in test")
             raise AssertionError("SAML path not expected in this test")
 
-        self.connection = types.SimpleNamespace(get=_conn_get, post=lambda *a, **k: None, cookies={})
+        self.connection = types.SimpleNamespace(
+            get=_conn_get,
+            post=lambda *a, **k: None,
+            cookies={},
+            close=lambda: None,
+        )
 
     def login(self, _u, _p):
         self.login_count += 1
@@ -87,6 +92,30 @@ def test_bot_login_succeeds(tmp_path, monkeypatch):
     _patch_sites(monkeypatch, client, [FakeSite()])
     client.login()
     assert client.active_label == "bot"
+
+
+def test_replace_site_closes_previous_connection(tmp_path):
+    client = wc.WikiClient(_config(tmp_path))
+    closed: list[object] = []
+
+    def trackable_site() -> FakeSite:
+        site = FakeSite()
+        conn = site.connection
+        site.connection = types.SimpleNamespace(
+            get=conn.get,
+            post=conn.post,
+            cookies=conn.cookies,
+            close=lambda s=site: closed.append(s),
+        )
+        return site
+
+    first = trackable_site()
+    second = trackable_site()
+    with client._lock.write():
+        client._replace_site(first)
+    with client._lock.write():
+        client._replace_site(second)
+    assert closed == [first]
 
 
 def test_falls_back_to_user_clientlogin(tmp_path, monkeypatch):

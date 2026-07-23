@@ -30,7 +30,7 @@ from wg21_wiki_mcp.errors import (
     PageNotFound,
     to_mcp_error,
 )
-from wg21_wiki_mcp.pagination import decode_cursor
+from wg21_wiki_mcp.pagination import decode_cursor, encode_cursor
 
 # ---------------------------------------------------------------------------
 # to_mcp_error unit tests
@@ -167,6 +167,26 @@ class TestBadCursorErrorShape:
     def test_none_cursor_returns_empty_dict(self):
         assert decode_cursor(None) == {}
 
+    def test_invalid_offset_through_server_wrap(self, fake_client, make_ctx):
+        from wg21_wiki_mcp import tools
+        from wg21_wiki_mcp.server import _wrap
+
+        ctx = make_ctx(fake_client)
+        bad_cursor = encode_cursor({"o": "not-an-int"})
+        with pytest.raises(McpError) as exc_info:
+            _wrap(tools.search_wiki, ctx, "topic", cursor=bad_cursor)
+        assert exc_info.value.error.code == INVALID_PARAMS
+
+    def test_negative_offset_through_server_wrap(self, fake_client, make_ctx):
+        from wg21_wiki_mcp import tools
+        from wg21_wiki_mcp.server import _wrap
+
+        ctx = make_ctx(fake_client)
+        bad_cursor = encode_cursor({"o": -5})
+        with pytest.raises(McpError) as exc_info:
+            _wrap(tools.list_meetings, ctx, cursor=bad_cursor)
+        assert exc_info.value.error.code == INVALID_PARAMS
+
 
 # ---------------------------------------------------------------------------
 # Config-without-credentials error shape
@@ -259,7 +279,7 @@ class TestAuthFailureErrorShape:
         monkeypatch.setattr(wc.time, "sleep", lambda *_a, **_k: None)
 
         class AlwaysAuthDeniedSite:
-            connection = types.SimpleNamespace(cookies={})
+            connection = types.SimpleNamespace(cookies={}, close=lambda: None)
 
             def login(self, _u, _p):
                 pass

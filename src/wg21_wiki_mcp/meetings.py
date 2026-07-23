@@ -96,19 +96,30 @@ class MeetingCalendar:
             now = datetime.now(timezone.utc)
             if self._last_fetched is not None and now - self._last_fetched < _REFRESH_INTERVAL:
                 return
-            try:
-                resp = self._session.get(PUBLIC_MEETINGS_URL, timeout=20)
-                resp.raise_for_status()
-                self._windows = parse_meeting_windows(resp.text)
-                self._parse_status = "ok" if self._windows else "partial"
-            except Exception as exc:  # noqa: BLE001 - network/parse failure -> conservative
-                logger.warning(
-                    "Calendar fetch/parse failed: %s",
-                    safe_exception_summary(exc),
-                )
+            session = self._session
+
+        fetched_windows: list[tuple[date, date]] | None = None
+        fetch_succeeded = False
+        try:
+            resp = session.get(PUBLIC_MEETINGS_URL, timeout=20)
+            resp.raise_for_status()
+            fetched_windows = parse_meeting_windows(resp.text)
+            fetch_succeeded = True
+        except Exception as exc:  # noqa: BLE001 - network/parse failure -> conservative
+            logger.warning(
+                "Calendar fetch/parse failed: %s",
+                safe_exception_summary(exc),
+            )
+
+        with self._lock:
+            if self._closed:
+                return
+            self._last_fetched = now
+            if fetch_succeeded:
+                self._windows = fetched_windows or []
+                self._parse_status = "ok" if fetched_windows else "partial"
+            else:
                 self._parse_status = "failed"
-            finally:
-                self._last_fetched = now
 
     def _effective_windows(self) -> tuple[list[tuple[date, date]], str]:
         """Override windows take precedence; otherwise the fetched windows."""

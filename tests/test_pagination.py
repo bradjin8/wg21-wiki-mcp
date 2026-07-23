@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from mcp.shared.exceptions import McpError
 
-from wg21_wiki_mcp.pagination import chunk_utf8, decode_cursor, encode_cursor
+from wg21_wiki_mcp.pagination import chunk_utf8, cursor_offset, decode_cursor, encode_cursor
 
 
 def test_cursor_roundtrip():
@@ -30,6 +30,30 @@ def test_non_dict_cursor_rejected():
     bad = base64.urlsafe_b64encode(json.dumps([1, 2]).encode()).decode()
     with pytest.raises(McpError):
         decode_cursor(bad)
+
+
+def test_cursor_offset_defaults_to_zero():
+    assert cursor_offset(None) == 0
+    assert cursor_offset(encode_cursor({})) == 0
+
+
+def test_cursor_offset_roundtrip():
+    assert cursor_offset(encode_cursor({"o": 42})) == 42
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"o": "abc"},
+        {"o": -1},
+        {"o": 1.5},
+        {"o": True},
+    ],
+)
+def test_cursor_offset_rejects_invalid_values(payload):
+    with pytest.raises(McpError) as exc:
+        cursor_offset(encode_cursor(payload))
+    assert exc.value.error.code == -32602
 
 
 def test_chunk_reassembly_is_byte_for_byte():
