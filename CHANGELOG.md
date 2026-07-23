@@ -10,6 +10,10 @@ for the pre-1.0 API stability policy and deprecation timeline.
 
 ## [Unreleased]
 
+_(none)_
+
+## [0.2.1] - 2026-07-23
+
 ### Security
 - `config.py`: `Credentials.password` is now `field(repr=False)` so the plaintext
   password is excluded from `repr()`/`print()`/debugger output; because `Config`
@@ -56,9 +60,10 @@ for the pre-1.0 API stability policy and deprecation timeline.
 - `docs/FIRST_PYPI_PUBLISH.md`: one-time Trusted Publisher checklist for the first PyPI release.
 - Meeting-time **latency gate** CI step on `ubuntu-latest` / Python 3.12 (`pytest -m latency_gate`).
 - Thread-safe `get_context()` / lifespan shutdown via `_state_lock` in `server.py`.
-- PyPI publish workflow (`.github/workflows/publish.yml`) on `v*` tag push via
-  Trusted Publisher; `requirements-lock.txt` with CI lockfile reproducibility
-  gate; README PyPI install instructions and PyPI project URL in `pyproject.toml`.
+- PyPI publish workflow (`.github/workflows/publish.yml`) on published GitHub
+  Release via Trusted Publisher; `requirements-lock.txt` with CI lockfile
+  reproducibility gate; README PyPI install instructions and PyPI project URL
+  in `pyproject.toml`.
 - Release supply-chain hardening: GitHub Actions and pre-commit hooks pinned to
   full SHA digests; publish workflow generates a CycloneDX SBOM, signs
   distributions with Sigstore, and attaches the SBOM plus `.sigstore.json`
@@ -178,6 +183,7 @@ _(none)_
   `get_recent_changes`, `wiki_status`, with opaque cursor pagination.
 - Verbatim, provenance-bearing responses (canonical + `oldid` URLs, `revid`).
 
-[Unreleased]: https://github.com/cppalliance/wg21-wiki-mcp/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/cppalliance/wg21-wiki-mcp/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/cppalliance/wg21-wiki-mcp/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/cppalliance/wg21-wiki-mcp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/cppalliance/wg21-wiki-mcp/releases/tag/v0.1.0
