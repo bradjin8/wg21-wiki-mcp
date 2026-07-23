@@ -178,7 +178,7 @@ def test_get_pages_max_wait_raises_when_deadline_exceeded(fetcher_stack, monkeyp
             return base
         return base + 100.0
 
-    monkeypatch.setattr("wg21_wiki_mcp.fetch.time.monotonic", fake_monotonic)
+    monkeypatch.setattr("wg21_wiki_mcp.deadlines.time.monotonic", fake_monotonic)
     with pytest.raises(FetchError, match="timed out"):
         fetcher.get_pages(["P"], ttl_seconds=1000, max_wait_s=0.5)
 

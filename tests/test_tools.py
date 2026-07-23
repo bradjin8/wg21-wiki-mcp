@@ -15,7 +15,7 @@ from wg21_wiki_mcp.models import FetchError, PageNotFound
 def _stale_outlink_fetched_at(ctx, *, extra_seconds: int = 3600) -> str:
     from datetime import datetime, timedelta, timezone
 
-    return (datetime.now(timezone.utc) - timedelta(seconds=ctx.current_ttl() + extra_seconds)).isoformat()
+    return (datetime.now(timezone.utc) - timedelta(seconds=ctx.calendar.ttl_seconds() + extra_seconds)).isoformat()
 
 
 def _seed_stale_outlink_cache(ctx, title: str, links: list[str]) -> str:

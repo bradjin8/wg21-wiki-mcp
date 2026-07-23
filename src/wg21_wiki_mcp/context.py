@@ -47,10 +47,6 @@ class ServerContext:
         self.client.login()
 
     # -- shared helpers -----------------------------------------------------
-    def current_ttl(self) -> int:
-        """Return the current meeting-aware cache TTL in seconds."""
-        return self.calendar.ttl_seconds()
-
     def provenance(self, outcome: FetchOutcome) -> Provenance:
         """Build a Provenance record (URLs, revid, timestamps) for a fetch outcome."""
         return Provenance(

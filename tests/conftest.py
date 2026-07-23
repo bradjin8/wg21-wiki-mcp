@@ -172,9 +172,6 @@ class FakeWikiClient:
             resp["continue"] = {"plcontinue": str(start + limit)}
         return resp
 
-    def statistics(self) -> dict:  # pragma: no cover - unused by tests
-        return {"query": {"statistics": {"pages": len(self.pages)}}}
-
 
 @dataclass
 class FakeCalendar:

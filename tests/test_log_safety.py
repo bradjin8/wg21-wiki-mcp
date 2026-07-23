@@ -311,15 +311,7 @@ class TestAuthFailureMessages:
 
 
 class TestRedactionsConcurrency:
-    """Barrier-synchronized stress tests for the redaction registry.
-
-    CI exercises CPython 3.13 with the GIL, not the free-threaded ``python3.13t``
-    build. These tests prove lock discipline under concurrent threads; the lock
-    + immutable snapshot design provides structural safety on 3.13t as well.
-    """
-
     def test_concurrent_register_clear_and_sanitize(self):
-        """Concurrent mutation and scrubbing raise no errors; witness stays literally redacted when live."""
         witness = "anchor-redaction-secret-xyz"
         register_redactions(witness)
         probe = f"leak {witness} trailer"
@@ -378,7 +370,6 @@ class TestRedactionsConcurrency:
         assert post_check not in sanitize_text(f"leak {post_check}")
 
     def test_concurrent_register_does_not_drop_active_redactions(self):
-        """A registered witness stays literally redacted while other threads keep adding secrets."""
         witness = "persistent-witness-secret-abc"
         register_redactions(witness)
         errors: list[BaseException] = []

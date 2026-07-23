@@ -18,7 +18,7 @@ from .cache import CacheEntry, title_hash
 from .context import ServerContext
 from .deadlines import MEETING_TOOL_TIMEOUT_MSG, composite_deadline, timeout_remaining
 from .fetch import DEFAULT_COMPOSITE_MAX_WAIT_S
-from .locks import EvictableLockMap
+from .locks import DEFAULT_MAX_LOCK_ENTRIES, EvictableLockMap
 from .log import get_logger
 from .log_safety import safe_exception_summary
 from .models import (
@@ -52,7 +52,7 @@ _DEFAULT_BUNDLE_PAGE_MAX_BYTES = 8 * 1024
 _MAX_LIST_LIMIT = 50
 _MAX_NS_PAGE_LIMIT = 500
 _OUTLINKS_KEY_SEP = "\0outlinks="
-_MAX_OUTLINKS_LOCK_ENTRIES = 256
+_MAX_OUTLINKS_LOCK_ENTRIES = DEFAULT_MAX_LOCK_ENTRIES
 
 
 _outlinks_map = EvictableLockMap(max_entries=lambda: _MAX_OUTLINKS_LOCK_ENTRIES)
@@ -149,7 +149,7 @@ def _cached_page_outlinks(
     deadline: float | None = None,
 ) -> list[str]:
     """Outlink index for ``title``, cached for the current meeting-aware TTL."""
-    ttl_seconds = ctx.current_ttl()
+    ttl_seconds = ctx.calendar.ttl_seconds()
     key = _outlinks_cache_key(title)
     entry = ctx.cache.get(key)
     stale_entry = entry
@@ -266,13 +266,13 @@ def get_page(
         outcome = ctx.fetcher.get_page_section(
             title,
             section,
-            ttl_seconds=ctx.current_ttl(),
+            ttl_seconds=ctx.calendar.ttl_seconds(),
             refresh=refresh,
         )
     else:
         outcome = ctx.fetcher.get_page(
             title,
-            ttl_seconds=ctx.current_ttl(),
+            ttl_seconds=ctx.calendar.ttl_seconds(),
             refresh=refresh,
             max_wait_s=max_wait_s,
         )
@@ -481,7 +481,7 @@ def get_meeting_sessions(
     fetched = (
         ctx.fetcher.get_pages(
             candidates,
-            ttl_seconds=ctx.current_ttl(),
+            ttl_seconds=ctx.calendar.ttl_seconds(),
             max_wait_s=_remaining(deadline),
         )
         if candidates

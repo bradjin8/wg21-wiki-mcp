@@ -126,14 +126,12 @@ def _saml_http_request(
 ) -> requests.Response:
     """Run one SAML HTTP hop with retry on transient failures."""
     request_url = str(args[0]) if args else str(kwargs.get("url", ""))
-    last_exc: BaseException | None = None
     for attempt in range(_SAML_MAX_RETRIES):
         timeout = http_timeout(deadline, cap=cap, on_exceeded=API_TIMEOUT_MSG)
         _log_saml_step(step, attempt=attempt + 1, max_attempts=_SAML_MAX_RETRIES, url=request_url or None)
         try:
             resp = method(*args, timeout=timeout, **kwargs)
         except (requests.ConnectionError, requests.Timeout) as exc:
-            last_exc = exc
             _log_saml_step(
                 f"{step}_transient_error",
                 error=type(exc).__name__,
@@ -172,11 +170,6 @@ def _saml_http_request(
             continue
         return resp
 
-    if last_exc is not None:
-        raise _saml_error(
-            f"SAML SSO request failed: {type(last_exc).__name__}.",
-            url=request_url or None,
-        ) from last_exc
     raise AuthError("SAML SSO request failed after retries.")
 
 
@@ -346,9 +339,6 @@ class WikiClient:
     def _timeout_remaining(deadline: float | None) -> float | None:
         """Return seconds left until ``deadline`` (API budget)."""
         return timeout_remaining(deadline, on_exceeded=API_TIMEOUT_MSG)
-
-    def _http_timeout(self, deadline: float | None, *, cap: float = 30.0) -> float:
-        return http_timeout(deadline, cap=cap, on_exceeded=API_TIMEOUT_MSG)
 
     @contextmanager
     def _site_request_timeout(self, site: mwclient.Site, deadline: float | None) -> Iterator[None]:
