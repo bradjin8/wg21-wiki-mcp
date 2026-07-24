@@ -205,12 +205,13 @@ class TestLogSafetyFilter:
         assert filter_count == 1
         assert sum(1 for filt in again.filters if isinstance(filt, LogSafetyFilter)) == 1
 
-    def test_raw_stdlib_logger_is_not_redacted_without_get_logger(self, caplog):
+    def test_raw_stdlib_logger_under_package_is_redacted(self, caplog):
         secret = "raw-stdlib-secret-value"
         register_redactions(secret)
         caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp.raw_test")
         logging.getLogger("wg21_wiki_mcp.raw_test").warning("leak %s", secret)
-        assert secret in caplog.text
+        assert secret not in caplog.text
+        assert "[REDACTED]" in caplog.text
 
 
 class TestAuthFailureMessages:
