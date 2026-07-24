@@ -1,6 +1,6 @@
 # First PyPI publish (one-time setup)
 
-> **Status:** Completed for `wg21-wiki-mcp` 0.2.x. Keep this file as an archive of
+> **Status:** Completed for `wg21-wiki-mcp` 0.x. Keep this file as an archive of
 > the Trusted Publisher setup; ongoing releases follow [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 The [publish workflow](../.github/workflows/publish.yml) runs automatically when

@@ -18,19 +18,19 @@ Install from [PyPI](https://pypi.org/project/wg21-wiki-mcp/) (recommended):
 
 ```bash
 pipx install wg21-wiki-mcp
-# or: pip install wg21-wiki-mcp==0.2.1
+# or: pip install wg21-wiki-mcp==0.3.0
 ```
 
 Or run without a manual install via [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uvx --from wg21-wiki-mcp==0.2.1 wg21-wiki-mcp
+uvx --from wg21-wiki-mcp==0.3.0 wg21-wiki-mcp
 ```
 
 Install from GitHub when you need a specific commit or branch:
 
 ```bash
-pipx install "git+https://github.com/cppalliance/wg21-wiki-mcp.git@v0.2.1"
+pipx install "git+https://github.com/cppalliance/wg21-wiki-mcp.git@v0.3.0"
 # development branch:
 uvx --refresh --from git+https://github.com/cppalliance/wg21-wiki-mcp.git@develop wg21-wiki-mcp
 ```
@@ -58,7 +58,7 @@ Minimal Cursor / `uvx` example:
   "mcpServers": {
     "wg21-wiki": {
       "command": "uvx",
-      "args": ["--from", "wg21-wiki-mcp==0.2.1", "wg21-wiki-mcp"],
+      "args": ["--from", "wg21-wiki-mcp==0.3.0", "wg21-wiki-mcp"],
       "env": {
         "WIKI_BOT_USERNAME": "YourAccount@yourbot",
         "WIKI_BOT_PASSWORD": "the-bot-password"
