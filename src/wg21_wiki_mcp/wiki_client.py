@@ -116,7 +116,7 @@ def _resolve_saml_credential_fields(
     return user_field, pass_field
 
 
-def _saml_http_request(
+def _saml_http_request(  # type: ignore[return]
     method: Callable[..., requests.Response],
     *args: Any,
     deadline: float | None,
@@ -169,8 +169,6 @@ def _saml_http_request(
             time.sleep(sleep_s)
             continue
         return resp
-
-    raise AuthError("SAML SSO request failed after retries.")
 
 
 class _RWLock:

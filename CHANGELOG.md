@@ -18,8 +18,10 @@ _(none)_
 - `log_safety.py`: broaden credential-pattern redaction (`Cookie`, `Set-Cookie`,
   `session=`, `api_key`, bare `Bearer`, multiline `Authorization`); recursively
   scrub nested log `args`, `exc_info`, and pre-formatted `exc_text`.
-- `log.py`: `_PackageLogger` attaches `LogSafetyFilter` to every
-  `logging.getLogger("wg21-wiki-mcp.*")` record, not only `get_logger()` callers.
+- `log.py`: `_install_package_log_safety()` inserts a `_SilentHandler` carrying
+  `LogSafetyFilter` first on the `wg21_wiki_mcp` package logger, so propagated
+  records from child loggers—including raw `logging.getLogger("wg21_wiki_mcp.*")`
+  callers—are redacted before any host handler emits.
 
 ### Changed
 - `pagination.py`: add `cursor_offset()`; malformed or negative offset `o` values
