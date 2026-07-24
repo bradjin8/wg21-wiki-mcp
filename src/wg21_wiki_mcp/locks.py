@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 _DEFAULT_MAX_ENTRIES = 256
+DEFAULT_MAX_LOCK_ENTRIES = _DEFAULT_MAX_ENTRIES
 
 
 @dataclass

@@ -14,16 +14,15 @@ re-login, and load control. Cache-missing fetches are:
 
 from __future__ import annotations
 
-import time
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 from filelock import FileLock, Timeout
 
 from .cache import Cache, CacheEntry, title_hash
-from .deadlines import PAGE_FETCH_TIMEOUT_MSG, timeout_remaining
-from .locks import EvictableLockMap
+from .deadlines import PAGE_FETCH_TIMEOUT_MSG, composite_deadline, timeout_remaining
+from .locks import DEFAULT_MAX_LOCK_ENTRIES, EvictableLockMap
 from .log import get_logger
 from .log_safety import safe_exception_summary
 from .models import FetchError
@@ -35,7 +34,7 @@ _LOCK_TIMEOUT_S = 60
 # Composite tools (e.g. get_meeting_sessions) cap total wait for lock + network.
 DEFAULT_COMPOSITE_MAX_WAIT_S = 30.0
 # Idle in-process lock slots are evicted once the map exceeds this size.
-_MAX_INPROC_LOCK_ENTRIES = 256
+_MAX_INPROC_LOCK_ENTRIES = DEFAULT_MAX_LOCK_ENTRIES
 _SECTION_KEY_SEP = "\0section="
 
 
@@ -143,7 +142,7 @@ class PageFetcher:
         max_wait_s: float | None = None,
     ) -> dict[str, FetchOutcome]:
         """Resolve many titles at once, cache-first then batched network fetch."""
-        deadline = time.monotonic() + max_wait_s if max_wait_s is not None else None
+        deadline = composite_deadline(max_wait_s) if max_wait_s is not None else None
         now = datetime.now(timezone.utc)
         outcomes: dict[str, FetchOutcome] = {}
         need_network: list[str] = []
@@ -309,7 +308,7 @@ class PageFetcher:
                 stack.enter_context(_released(lock))
             except Timeout as exc:
                 if deadline is not None:
-                    raise FetchError("Page fetch timed out waiting for the wiki.") from exc
+                    raise FetchError(PAGE_FETCH_TIMEOUT_MSG) from exc
                 # Another process is taking unusually long; proceed without the
                 # cross-process lock rather than hang. The re-check after this
                 # still prevents redundant work in the common case.
@@ -351,18 +350,7 @@ def _from_entry(entry: CacheEntry, *, from_cache: bool) -> FetchOutcome:
 
 def _section_outcome(outcome: FetchOutcome, title: str) -> FetchOutcome:
     """Restore the caller's page title (cache keys embed the section suffix)."""
-    return FetchOutcome(
-        requested_title=title,
-        title=outcome.title,
-        redirected_from=outcome.redirected_from,
-        revid=outcome.revid,
-        timestamp=outcome.timestamp,
-        size=outcome.size,
-        content=outcome.content,
-        fetched_at=outcome.fetched_at,
-        from_cache=outcome.from_cache,
-        missing=outcome.missing,
-    )
+    return replace(outcome, requested_title=title)
 
 
 def _missing(title: str, page: FetchedPage | None, fetched_at: str) -> FetchOutcome:

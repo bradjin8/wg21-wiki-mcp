@@ -12,6 +12,39 @@ for the pre-1.0 API stability policy and deprecation timeline.
 
 _(none)_
 
+## [0.3.0] - 2026-07-24
+
+### Security
+- `log_safety.py`: broaden credential-pattern redaction (`Cookie`, `Set-Cookie`,
+  `session=`, `api_key`, bare `Bearer`, multiline `Authorization`); recursively
+  scrub nested log `args`, `exc_info`, and pre-formatted `exc_text`.
+- `log.py`: `_install_package_log_safety()` inserts a `_SilentHandler` carrying
+  `LogSafetyFilter` first on the `wg21_wiki_mcp` package logger, so propagated
+  records from child loggers—including raw `logging.getLogger("wg21_wiki_mcp.*")`
+  callers—are redacted before any host handler emits.
+
+### Changed
+- `pagination.py`: add `cursor_offset()`; malformed or negative offset `o` values
+  raise `McpError(INVALID_PARAMS)` from `search_wiki`, `get_page`, and
+  `list_meetings` instead of mapping to `FETCH_ERROR`.
+- `wiki_client.py`: close the prior `mwclient.Site` connection on re-login;
+  remove unreachable SAML retry tail and unused `_http_timeout`.
+- `meetings.py`: narrow `ensure_fresh` critical section (HTTP GET outside lock).
+- `config.py`: default `user_agent` built from `__version__` (no manual drift).
+- `fetch.py`: use `composite_deadline()` and shared `PAGE_FETCH_TIMEOUT_MSG`;
+  `dataclasses.replace` for section outcomes; shared `DEFAULT_MAX_LOCK_ENTRIES`.
+- `server.py`: MCP tool byte-limit defaults reference `tools.py` constants.
+- `context.py`: remove redundant `current_ttl()` wrapper.
+- Documentation: trim and de-duplicate `README.md`; fix install pins and
+  `@develop` branch references; update `ARCHITECTURE.md` component map;
+  mark `docs/FIRST_PYPI_PUBLISH.md` as completed archive.
+
+### Added
+- `list_meetings` docstring notes offset-pagination instability when meeting
+  titles change between pages.
+- Tests for log-filter idempotency, stdlib logger redaction, cursor offset
+  validation, and site replacement on re-login.
+
 ## [0.2.1] - 2026-07-23
 
 ### Security
@@ -183,7 +216,8 @@ _(none)_
   `get_recent_changes`, `wiki_status`, with opaque cursor pagination.
 - Verbatim, provenance-bearing responses (canonical + `oldid` URLs, `revid`).
 
-[Unreleased]: https://github.com/cppalliance/wg21-wiki-mcp/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/cppalliance/wg21-wiki-mcp/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/cppalliance/wg21-wiki-mcp/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/cppalliance/wg21-wiki-mcp/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/cppalliance/wg21-wiki-mcp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/cppalliance/wg21-wiki-mcp/releases/tag/v0.1.0

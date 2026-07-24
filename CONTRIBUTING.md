@@ -86,12 +86,9 @@ pytest tests/test_wiki_client.py tests/test_wiki_client_more.py tests/test_wiki_
 
 ## Confidentiality rules (important)
 
-- Never embed real wiki page titles, namespace names, or page content in source,
-  tests, fixtures, or docs. The wiki structure is discovered at runtime.
-- Only the public meeting schedule and invented/generic placeholders belong in
-  the repo. Tests use synthetic data (e.g. `"2026-06 Alpha"`).
-- The cache DB and any dumps are git-ignored; do not commit them.
-- See [SECURITY.md](SECURITY.md) for credential handling.
+Never embed real wiki page titles, namespace names, or page content in source,
+tests, fixtures, or docs. See [SECURITY.md](SECURITY.md) for credential handling
+and the full confidentiality policy.
 
 ## Start here (reading order)
 
@@ -110,7 +107,7 @@ transport evaluation and the opt-in prototype.
 
 ## Pull requests
 
-- Keep changes focused; add tests for new behavior and keep coverage >= 90%.
+- Keep changes focused; add tests for new behavior and keep coverage >= 95%.
 - Run `pre-commit run --all-files` and the offline suite before opening a PR.
 - When MCP tool signatures, docstrings, or public response models change, run
   `python scripts/build_api_docs.py` and commit the updated `docs/API.md`.
@@ -196,10 +193,9 @@ pip-compile pyproject.toml --output-file=requirements-lock.txt --strip-extras
   by `release: published`, and GitHub always loads release-triggered workflows
   from the default branch — so publishing a GitHub Release runs the workflow as
   it exists on `develop`.
-- `master` is currently **stale**: it still points at the `v0.2.0` commit and does
-  not contain `publish.yml`, so it plays no part in publishing. Until the branches
-  are reconciled, treat `develop` as the release source (do not tag or release
-  from `master`).
+- `master` is currently **stale**: it still points at the initial repository commit and
+  does not contain current release work. Until the branches are reconciled, treat
+  `develop` or a release tag as the install source (do not tag or release from `master`).
 - To cut a release `X.Y.Z`:
   1. Bump the version in two places: `version` in [pyproject.toml](pyproject.toml)
      and `__version__` in [src/wg21_wiki_mcp/__init__.py](src/wg21_wiki_mcp/__init__.py)

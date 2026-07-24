@@ -101,6 +101,12 @@ class Credentials:
     password: str = field(repr=False)  # keep secrets out of repr/print/debug output
 
 
+def _default_user_agent() -> str:
+    from . import __version__
+
+    return f"wg21-wiki-mcp/{__version__} (+https://github.com/cppalliance/wg21-wiki-mcp)"
+
+
 @dataclass(frozen=True)
 class Config:
     """Immutable, validated configuration for the server.
@@ -116,7 +122,7 @@ class Config:
     ttl_normal_s: int = DEFAULT_TTL_NORMAL_S
     ttl_meeting_s: int = DEFAULT_TTL_MEETING_S
     meeting_window_overrides: list[tuple[date, date]] = field(default_factory=list)
-    user_agent: str = "wg21-wiki-mcp/0.1 (+https://github.com/cppalliance/wg21-wiki-mcp)"
+    user_agent: str = field(default_factory=_default_user_agent)
     saml_username_field: str | None = None
     saml_password_field: str | None = None
     saml_timeout_s: int = DEFAULT_SAML_TIMEOUT_S

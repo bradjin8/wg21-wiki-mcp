@@ -154,7 +154,7 @@ def search_wiki(
 def get_page(
     title: str,
     section: int | None = None,
-    max_bytes: int = 49152,
+    max_bytes: int = tools._DEFAULT_PAGE_MAX_BYTES,
     cursor: str | None = None,
     refresh: bool = False,
 ) -> PageContent:
@@ -202,7 +202,7 @@ def get_meeting_sessions(
     meeting: str | None = None,
     groups: list[str] | None = None,
     include_wikitext: bool = True,
-    max_page_bytes: int = 8192,
+    max_page_bytes: int = tools._DEFAULT_BUNDLE_PAGE_MAX_BYTES,
 ) -> SessionBundle:
     """Return raw materials to compose a meeting's schedule.
 

@@ -1,10 +1,11 @@
 # First PyPI publish (one-time setup)
 
+> **Status:** Completed for `wg21-wiki-mcp` 0.x. Keep this file as an archive of
+> the Trusted Publisher setup; ongoing releases follow [CONTRIBUTING.md](../CONTRIBUTING.md).
+
 The [publish workflow](../.github/workflows/publish.yml) runs automatically when
 a GitHub Release is **published** (`release: published`) after this one-time
-configuration. Until the first successful publish, `pip install wg21-wiki-mcp`
-will not resolve on PyPI even though the workflow and README install
-instructions are in place.
+configuration.
 
 ## Prerequisites
 

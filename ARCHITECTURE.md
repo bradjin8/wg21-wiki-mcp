@@ -8,18 +8,23 @@ could go next.
 ## Component map
 
 ```
-server.py        FastMCP stdio server; registers tools; lifespan logs in.
+server.py        FastMCP server; registers tools; lifespan logs in.
   tools.py       Tool logic (structured outputs). All page content via the fetcher.
     context.py   ServerContext: wires config + client + calendar + cache + fetcher.
       fetch.py       PageFetcher: cache-first, batched, single-flight retrieval.
         cache.py     SQLite (WAL) shared cache in ~/.isocpp.wiki/ + per-page lock paths.
         wiki_client.py  Authenticated MediaWiki client (bot/user SSO, re-login, batch).
+        locks.py     EvictableLockMap: bounded per-key lock map for fetch/outlinks.
       meetings.py  MeetingCalendar: public-calendar -> meeting-aware cache TTL.
+  deadlines.py   Composite timeout budgets for API/fetch/tool calls.
+  log.py         Package logger factory; installs LogSafetyFilter on all package loggers.
+  log_safety.py  Credential/page-content redaction for logs and auth error messages.
   models.py      Pydantic response models; re-exports error types from errors.py.
   errors.py      Error hierarchy, documented codes, and to_mcp_error() mapping.
   pagination.py  Opaque cursors + UTF-8-safe chunking.
   wikitext.py    Deterministic agenda time-slot extraction (the only content parse).
   config.py      Environment-driven configuration; re-exports ConfigError from errors.py.
+  deprecation.py warn_deprecated() helper for future API removals.
 ```
 
 ## Request data flow

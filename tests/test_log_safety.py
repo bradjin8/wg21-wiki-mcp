@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import sys
 import threading
+from collections import ChainMap
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,10 +19,11 @@ from wg21_wiki_mcp.config import Config, Credentials
 from wg21_wiki_mcp.context import ServerContext
 from wg21_wiki_mcp.errors import AUTH_ERROR, AuthError, to_mcp_error
 from wg21_wiki_mcp.fetch import PageFetcher
-from wg21_wiki_mcp.log import get_logger
+from wg21_wiki_mcp.log import _install_package_log_safety, get_logger
 from wg21_wiki_mcp.log_safety import (
     AUTH_FAILURE_MESSAGE,
     LogSafetyFilter,
+    _sanitize_exc_info,
     auth_error_mcp_message,
     auth_path_failure_label,
     clear_redactions,
@@ -61,6 +64,17 @@ class TestSanitizeText:
         bearer = sanitize_text("Authorization: Bearer mytoken123")
         assert "mytoken123" not in bearer
         assert "[REDACTED]" in bearer
+        bare_bearer = sanitize_text("Use Bearer mytoken123 here")
+        assert "mytoken123" not in bare_bearer
+        cookie = sanitize_text("Cookie: session=abc123; path=/")
+        assert "abc123" not in cookie
+        assert "[REDACTED]" in cookie
+
+    def test_redacts_multiline_authorization_header(self):
+        text = "Authorization: Bearer secret-token\nX-Other: value"
+        out = sanitize_text(text)
+        assert "secret-token" not in out
+        assert "X-Other: value" in out
 
     def test_ignores_short_secrets(self):
         register_redactions("abc")
@@ -157,13 +171,21 @@ class TestSanitizeText:
             ctx.close()
 
 
+@pytest.fixture
+def _restore_package_handlers():
+    root = logging.getLogger("wg21_wiki_mcp")
+    saved = root.handlers.copy()
+    yield
+    root.handlers[:] = saved
+
+
 class TestLogSafetyFilter:
     def test_filter_scrubs_message_and_args(self, caplog):
         secret = "bot-password-value-xyz"
         content = "verbatim wiki page content block"
         register_redactions(secret, content)
 
-        caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp.test_log_safety")
+        caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp")
         logger = get_logger("test_log_safety")
         logger.warning("failure with %s and %s", secret, content)
 
@@ -176,12 +198,50 @@ class TestLogSafetyFilter:
         secret = "registered-runtime-secret"
         register_redactions(secret)
 
-        caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp.fetch")
+        caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp")
         logger = get_logger("fetch")
         logger.warning("lock issue: %s", secret)
 
         assert secret not in caplog.text
         assert "[REDACTED]" in caplog.text
+
+    def test_get_logger_filter_is_idempotent(self):
+        logger = get_logger("test.idempotent")
+        again = get_logger("test.idempotent")
+        assert again is logger
+        root = logging.getLogger("wg21_wiki_mcp")
+        safety_filters = [
+            filt for handler in root.handlers for filt in handler.filters if isinstance(filt, LogSafetyFilter)
+        ]
+        assert len(safety_filters) == 1
+
+    def test_raw_stdlib_logger_under_package_is_redacted(self, caplog):
+        secret = "raw-stdlib-secret-value"
+        register_redactions(secret)
+        caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp")
+        logging.getLogger("wg21_wiki_mcp.raw_test").warning("leak %s", secret)
+        assert secret not in caplog.text
+        assert "[REDACTED]" in caplog.text
+
+    def test_preconfigured_package_handler_receives_redacted_records(self, _restore_package_handlers):
+        root = logging.getLogger("wg21_wiki_mcp")
+        captured: list[str] = []
+
+        class CaptureHandler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                captured.append(record.getMessage())
+
+        # Host attached an emitting handler before the library safety hook ran.
+        root.handlers.insert(0, CaptureHandler())
+        _install_package_log_safety(root)
+
+        secret = "preconfig-handler-secret-value"
+        register_redactions(secret)
+        get_logger("preconfig_test").warning("leak %s", secret)
+
+        assert captured
+        assert secret not in captured[0]
+        assert "[REDACTED]" in captured[0]
 
 
 class TestAuthFailureMessages:
@@ -234,7 +294,7 @@ class TestAuthFailureMessages:
     def test_calendar_failure_log_contains_no_secret(self, tmp_path, caplog):
         secret = "calendar-log-secret-value"
         register_redactions(secret)
-        caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp.meetings")
+        caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp")
 
         from wg21_wiki_mcp.meetings import MeetingCalendar
 
@@ -263,7 +323,7 @@ class TestAuthFailureMessages:
         page_content = "confidential wikitext that must never be logged"
         register_redactions(page_content)
 
-        caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp.fetch")
+        caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp")
 
         client = FakeWikiClient()
         client.pages[page_title] = FakePage(page_content, 1)
@@ -283,15 +343,7 @@ class TestAuthFailureMessages:
 
 
 class TestRedactionsConcurrency:
-    """Barrier-synchronized stress tests for the redaction registry.
-
-    CI exercises CPython 3.13 with the GIL, not the free-threaded ``python3.13t``
-    build. These tests prove lock discipline under concurrent threads; the lock
-    + immutable snapshot design provides structural safety on 3.13t as well.
-    """
-
     def test_concurrent_register_clear_and_sanitize(self):
-        """Concurrent mutation and scrubbing raise no errors; witness stays literally redacted when live."""
         witness = "anchor-redaction-secret-xyz"
         register_redactions(witness)
         probe = f"leak {witness} trailer"
@@ -350,7 +402,6 @@ class TestRedactionsConcurrency:
         assert post_check not in sanitize_text(f"leak {post_check}")
 
     def test_concurrent_register_does_not_drop_active_redactions(self):
-        """A registered witness stays literally redacted while other threads keep adding secrets."""
         witness = "persistent-witness-secret-abc"
         register_redactions(witness)
         errors: list[BaseException] = []
@@ -443,3 +494,79 @@ class TestLogSafetyFilterUnit:
         )
         assert LogSafetyFilter().filter(record) is True
         assert record.msg == 12345
+
+    def test_filter_scrubs_nested_args(self):
+        register_redactions("nested-secret-value")
+        record = logging.LogRecord(
+            name="wg21_wiki_mcp.test",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=1,
+            msg="nested %(outer)s",
+            args=(),
+            exc_info=None,
+        )
+        record.args = ({"outer": {"inner": "nested-secret-value"}},)
+        assert LogSafetyFilter().filter(record) is True
+        assert record.args == ({"outer": {"inner": "[REDACTED]"}},)
+
+    def test_filter_scrubs_exc_info_and_exc_text(self):
+        secret = "exc-secret-password"
+        register_redactions(secret)
+        record = logging.LogRecord(
+            name="wg21_wiki_mcp.test",
+            level=logging.ERROR,
+            pathname=__file__,
+            lineno=1,
+            msg="boom",
+            args=(),
+            exc_info=None,
+        )
+        try:
+            raise ValueError(f"password={secret}")
+        except ValueError:
+            record.exc_info = sys.exc_info()
+        record.exc_text = f"Traceback...\npassword={secret}"
+        assert LogSafetyFilter().filter(record) is True
+        formatter = logging.Formatter()
+        formatted = formatter.formatException(record.exc_info)
+        assert secret not in formatted
+        assert secret not in record.exc_text
+        assert "[REDACTED]" in record.exc_text
+
+    def test_filter_scrubs_chainmap_args(self):
+        register_redactions("chainmap-secret-value")
+        record = logging.LogRecord(
+            name="wg21_wiki_mcp.test",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=1,
+            msg="value=%(key)s",
+            args=(),
+            exc_info=None,
+        )
+        record.args = (ChainMap({"key": "chainmap-secret-value"}),)
+        assert LogSafetyFilter().filter(record) is True
+        assert record.args == ({"key": "[REDACTED]"},)
+
+    def test_sanitize_exc_info_does_not_mutate_original(self):
+        class PickyError(Exception):
+            def __init__(self, *, code: int, detail: str) -> None:
+                super().__init__(detail)
+                self.code = code
+
+        original = PickyError(code=1, detail="password=live-secret")
+        original_args = original.args
+        exc_type, sanitized, _tb = _sanitize_exc_info((PickyError, original, None))
+        assert original.args == original_args
+        assert "live-secret" not in str(sanitized)
+        assert exc_type is PickyError
+
+    def test_sanitize_exc_info_unicode_decode_error(self):
+        register_redactions("decode-secret-value")
+        original = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "password=decode-secret-value")
+        _exc_type, sanitized, _tb = _sanitize_exc_info((UnicodeDecodeError, original, None))
+        assert isinstance(sanitized, UnicodeDecodeError)
+        assert "decode-secret-value" not in str(sanitized)
+        assert "[REDACTED]" in str(sanitized)
+        assert original.args[-1] == "password=decode-secret-value"

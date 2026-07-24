@@ -79,6 +79,7 @@ class MeetingCalendar:
         self._session = session or requests.Session()
         self._session.headers.setdefault("User-Agent", config.user_agent)
         self._lock = threading.Lock()
+        self._refresh_lock = threading.Lock()
         self._windows: list[tuple[date, date]] = []
         self._last_fetched: datetime | None = None
         self._parse_status: str = "failed"
@@ -96,19 +97,38 @@ class MeetingCalendar:
             now = datetime.now(timezone.utc)
             if self._last_fetched is not None and now - self._last_fetched < _REFRESH_INTERVAL:
                 return
+
+        with self._refresh_lock:
+            with self._lock:
+                if self._closed:
+                    return
+                now = datetime.now(timezone.utc)
+                if self._last_fetched is not None and now - self._last_fetched < _REFRESH_INTERVAL:
+                    return
+                session = self._session
+
+            fetched_windows: list[tuple[date, date]] | None = None
+            fetch_succeeded = False
             try:
-                resp = self._session.get(PUBLIC_MEETINGS_URL, timeout=20)
+                resp = session.get(PUBLIC_MEETINGS_URL, timeout=20)
                 resp.raise_for_status()
-                self._windows = parse_meeting_windows(resp.text)
-                self._parse_status = "ok" if self._windows else "partial"
+                fetched_windows = parse_meeting_windows(resp.text)
+                fetch_succeeded = True
             except Exception as exc:  # noqa: BLE001 - network/parse failure -> conservative
                 logger.warning(
                     "Calendar fetch/parse failed: %s",
                     safe_exception_summary(exc),
                 )
-                self._parse_status = "failed"
-            finally:
+
+            with self._lock:
+                if self._closed:
+                    return
                 self._last_fetched = now
+                if fetch_succeeded:
+                    self._windows = fetched_windows or []
+                    self._parse_status = "ok" if fetched_windows else "partial"
+                else:
+                    self._parse_status = "failed"
 
     def _effective_windows(self) -> tuple[list[tuple[date, date]], str]:
         """Override windows take precedence; otherwise the fetched windows."""
