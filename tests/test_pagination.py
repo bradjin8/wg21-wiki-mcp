@@ -41,6 +41,13 @@ def test_cursor_offset_roundtrip():
     assert cursor_offset(encode_cursor({"o": 42})) == 42
 
 
+@pytest.mark.parametrize("default", [-1, True])
+def test_cursor_offset_rejects_invalid_default(default):
+    with pytest.raises(McpError) as exc:
+        cursor_offset(None, default=default)
+    assert exc.value.error.code == -32602
+
+
 @pytest.mark.parametrize(
     "payload",
     [

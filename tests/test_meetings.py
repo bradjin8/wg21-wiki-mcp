@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from datetime import date
 
 from wg21_wiki_mcp.config import Config, Credentials
@@ -104,6 +105,31 @@ def test_ensure_fresh_skips_when_closed(tmp_path):
     cal.close()
     cal.ensure_fresh()
     assert cal._last_fetched is None
+
+
+def test_ensure_fresh_single_flight_fetch(tmp_path):
+    calls = {"n": 0}
+
+    class _CountingSession:
+        headers: dict[str, str] = {}
+
+        def get(self, *_a, **_k):
+            calls["n"] += 1
+            return _FakeResp(_SAMPLE)
+
+    cal = MeetingCalendar(_config(tmp_path), session=_CountingSession())
+    barrier = threading.Barrier(3)
+
+    def worker() -> None:
+        barrier.wait(timeout=5)
+        cal.is_meeting_active()
+
+    threads = [threading.Thread(target=worker) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    assert calls["n"] == 1
 
 
 def test_close_is_idempotent(tmp_path):

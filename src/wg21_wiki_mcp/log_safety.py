@@ -12,12 +12,13 @@ upstream exception text that might carry credentials or page HTML.
 
 from __future__ import annotations
 
+import copy
 import logging
 import re
 import threading
 from collections.abc import Mapping
 from types import TracebackType
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from .config import Config
@@ -244,6 +245,34 @@ def _sanitize_log_value(value: object) -> object:
     return value
 
 
+def _sanitized_exception(
+    exc_type: type[BaseException],
+    exc_value: BaseException,
+    message: str,
+) -> BaseException:
+    """Build a scrubbed exception without mutating ``exc_value``."""
+    if exc_type is UnicodeDecodeError:
+        encoding = "utf-8"
+        obj: bytes | bytearray | memoryview = b""
+        start = 0
+        end = 1
+        if isinstance(exc_value, UnicodeDecodeError):
+            encoding = exc_value.encoding
+            obj = exc_value.object
+            start = exc_value.start
+            end = exc_value.end
+        return UnicodeDecodeError(encoding, obj, start, end, message)
+    try:
+        return exc_type(message)
+    except Exception:  # noqa: BLE001 - constructor-heavy types need a copied fallback
+        try:
+            sanitized_exc = copy.copy(exc_value)
+        except Exception:  # noqa: BLE001 - last resort when copy is unsupported
+            return RuntimeError(f"{exc_type.__name__}: {message}")
+        sanitized_exc.args = (message,)
+        return sanitized_exc
+
+
 def _sanitize_exc_info(
     exc_info: tuple[type[BaseException], BaseException, TracebackType | None],
 ) -> tuple[type[BaseException], BaseException, TracebackType | None]:
@@ -256,11 +285,7 @@ def _sanitize_exc_info(
         message = summary.split(": ", 1)[1]
     else:
         message = summary
-    try:
-        sanitized_exc = exc_type(message)
-    except Exception:  # noqa: BLE001 - fall back to mutating args on the live instance
-        sanitized_exc = exc_value
-        sanitized_exc.args = (message,)
+    sanitized_exc = _sanitized_exception(exc_type, exc_value, message)
     return exc_type, sanitized_exc, exc_tb
 
 
@@ -273,11 +298,11 @@ class LogSafetyFilter(logging.Filter):
             record.msg = sanitize_text(record.msg)
         if record.args:
             args = record.args
-            if isinstance(args, dict):
-                record.args = cast(Mapping[str, object], _sanitize_log_value(args))
+            if isinstance(args, Mapping):
+                record.args = cast(Any, _sanitize_log_value(args))
             elif isinstance(args, tuple):
-                if len(args) == 1 and isinstance(args[0], dict):
-                    record.args = (cast(Mapping[str, object], _sanitize_log_value(args[0])),)
+                if len(args) == 1 and isinstance(args[0], Mapping):
+                    record.args = (_sanitize_log_value(args[0]),)
                 else:
                     record.args = tuple(_sanitize_log_value(arg) for arg in args)
         if record.exc_info:

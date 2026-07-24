@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 import threading
+from collections import ChainMap
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -22,6 +23,7 @@ from wg21_wiki_mcp.log import get_logger
 from wg21_wiki_mcp.log_safety import (
     AUTH_FAILURE_MESSAGE,
     LogSafetyFilter,
+    _sanitize_exc_info,
     auth_error_mcp_message,
     auth_path_failure_label,
     clear_redactions,
@@ -203,13 +205,12 @@ class TestLogSafetyFilter:
         assert filter_count == 1
         assert sum(1 for filt in again.filters if isinstance(filt, LogSafetyFilter)) == 1
 
-    def test_raw_stdlib_logger_under_package_is_redacted(self, caplog):
+    def test_raw_stdlib_logger_is_not_redacted_without_get_logger(self, caplog):
         secret = "raw-stdlib-secret-value"
         register_redactions(secret)
         caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp.raw_test")
         logging.getLogger("wg21_wiki_mcp.raw_test").warning("leak %s", secret)
-        assert secret not in caplog.text
-        assert "[REDACTED]" in caplog.text
+        assert secret in caplog.text
 
 
 class TestAuthFailureMessages:
@@ -501,3 +502,40 @@ class TestLogSafetyFilterUnit:
         assert secret not in formatted
         assert secret not in record.exc_text
         assert "[REDACTED]" in record.exc_text
+
+    def test_filter_scrubs_chainmap_args(self):
+        register_redactions("chainmap-secret-value")
+        record = logging.LogRecord(
+            name="wg21_wiki_mcp.test",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=1,
+            msg="value=%(key)s",
+            args=(),
+            exc_info=None,
+        )
+        record.args = (ChainMap({"key": "chainmap-secret-value"}),)
+        assert LogSafetyFilter().filter(record) is True
+        assert record.args == ({"key": "[REDACTED]"},)
+
+    def test_sanitize_exc_info_does_not_mutate_original(self):
+        class PickyError(Exception):
+            def __init__(self, *, code: int, detail: str) -> None:
+                super().__init__(detail)
+                self.code = code
+
+        original = PickyError(code=1, detail="password=live-secret")
+        original_args = original.args
+        exc_type, sanitized, _tb = _sanitize_exc_info((PickyError, original, None))
+        assert original.args == original_args
+        assert "live-secret" not in str(sanitized)
+        assert exc_type is PickyError
+
+    def test_sanitize_exc_info_unicode_decode_error(self):
+        register_redactions("decode-secret-value")
+        original = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "password=decode-secret-value")
+        _exc_type, sanitized, _tb = _sanitize_exc_info((UnicodeDecodeError, original, None))
+        assert isinstance(sanitized, UnicodeDecodeError)
+        assert "decode-secret-value" not in str(sanitized)
+        assert "[REDACTED]" in str(sanitized)
+        assert original.args[-1] == "password=decode-secret-value"
