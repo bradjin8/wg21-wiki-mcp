@@ -177,7 +177,7 @@ class TestLogSafetyFilter:
         content = "verbatim wiki page content block"
         register_redactions(secret, content)
 
-        caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp.test_log_safety")
+        caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp")
         logger = get_logger("test_log_safety")
         logger.warning("failure with %s and %s", secret, content)
 
@@ -190,7 +190,7 @@ class TestLogSafetyFilter:
         secret = "registered-runtime-secret"
         register_redactions(secret)
 
-        caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp.fetch")
+        caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp")
         logger = get_logger("fetch")
         logger.warning("lock issue: %s", secret)
 
@@ -199,16 +199,18 @@ class TestLogSafetyFilter:
 
     def test_get_logger_filter_is_idempotent(self):
         logger = get_logger("test.idempotent")
-        filter_count = sum(1 for filt in logger.filters if isinstance(filt, LogSafetyFilter))
         again = get_logger("test.idempotent")
         assert again is logger
-        assert filter_count == 1
-        assert sum(1 for filt in again.filters if isinstance(filt, LogSafetyFilter)) == 1
+        root = logging.getLogger("wg21_wiki_mcp")
+        safety_filters = [
+            filt for handler in root.handlers for filt in handler.filters if isinstance(filt, LogSafetyFilter)
+        ]
+        assert len(safety_filters) == 1
 
     def test_raw_stdlib_logger_under_package_is_redacted(self, caplog):
         secret = "raw-stdlib-secret-value"
         register_redactions(secret)
-        caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp.raw_test")
+        caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp")
         logging.getLogger("wg21_wiki_mcp.raw_test").warning("leak %s", secret)
         assert secret not in caplog.text
         assert "[REDACTED]" in caplog.text
@@ -264,7 +266,7 @@ class TestAuthFailureMessages:
     def test_calendar_failure_log_contains_no_secret(self, tmp_path, caplog):
         secret = "calendar-log-secret-value"
         register_redactions(secret)
-        caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp.meetings")
+        caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp")
 
         from wg21_wiki_mcp.meetings import MeetingCalendar
 
@@ -293,7 +295,7 @@ class TestAuthFailureMessages:
         page_content = "confidential wikitext that must never be logged"
         register_redactions(page_content)
 
-        caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp.fetch")
+        caplog.set_level(logging.WARNING, logger="wg21_wiki_mcp")
 
         client = FakeWikiClient()
         client.pages[page_title] = FakePage(page_content, 1)

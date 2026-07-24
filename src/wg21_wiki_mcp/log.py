@@ -1,6 +1,6 @@
 """Library-style logging for wg21-wiki-mcp.
 
-Uses stdlib ``logging`` with a ``NullHandler`` on the package logger so hosts
+Uses stdlib ``logging`` with a silent handler on the package logger so hosts
 control output. Log calls must never include credentials or wiki page content
 (see SECURITY.md).
 """
@@ -13,36 +13,20 @@ from .log_safety import LogSafetyFilter
 
 _PACKAGE = "wg21_wiki_mcp"
 _LOG_FILTER = LogSafetyFilter()
-_HOOK_INSTALLED = False
 
 
-def _ensure_package_filter(logger: logging.Logger) -> None:
-    if not any(isinstance(f, LogSafetyFilter) for f in logger.filters):
-        logger.addFilter(_LOG_FILTER)
+class _SilentHandler(logging.Handler):
+    """Handler that runs filters but emits nowhere (library default)."""
 
+    def emit(self, record: logging.LogRecord) -> None:
+        pass
 
-def _install_get_logger_hook() -> None:
-    """Attach ``LogSafetyFilter`` to every logger under the package namespace."""
-    global _HOOK_INSTALLED
-    if _HOOK_INSTALLED:
-        return
-    manager = logging.Logger.manager
-    original_get_logger = manager.getLogger
-
-    def getLogger(name: str | None = None) -> logging.Logger:
-        logger = original_get_logger(name)  # type: ignore[arg-type]
-        if name is not None and (name == _PACKAGE or name.startswith(f"{_PACKAGE}.")):
-            _ensure_package_filter(logger)
-        return logger
-
-    manager.getLogger = getLogger  # type: ignore[method-assign]
-    _HOOK_INSTALLED = True
-
-
-_install_get_logger_hook()
 
 _root = logging.getLogger(_PACKAGE)
-_root.addHandler(logging.NullHandler())
+if not any(isinstance(handler, _SilentHandler) for handler in _root.handlers):
+    _handler = _SilentHandler()
+    _handler.addFilter(_LOG_FILTER)
+    _root.addHandler(_handler)
 
 
 def get_logger(name: str) -> logging.Logger:
