@@ -19,7 +19,7 @@ from wg21_wiki_mcp.config import Config, Credentials
 from wg21_wiki_mcp.context import ServerContext
 from wg21_wiki_mcp.errors import AUTH_ERROR, AuthError, to_mcp_error
 from wg21_wiki_mcp.fetch import PageFetcher
-from wg21_wiki_mcp.log import get_logger
+from wg21_wiki_mcp.log import _install_package_log_safety, get_logger
 from wg21_wiki_mcp.log_safety import (
     AUTH_FAILURE_MESSAGE,
     LogSafetyFilter,
@@ -171,6 +171,14 @@ class TestSanitizeText:
             ctx.close()
 
 
+@pytest.fixture
+def _restore_package_handlers():
+    root = logging.getLogger("wg21_wiki_mcp")
+    saved = root.handlers.copy()
+    yield
+    root.handlers[:] = saved
+
+
 class TestLogSafetyFilter:
     def test_filter_scrubs_message_and_args(self, caplog):
         secret = "bot-password-value-xyz"
@@ -214,6 +222,26 @@ class TestLogSafetyFilter:
         logging.getLogger("wg21_wiki_mcp.raw_test").warning("leak %s", secret)
         assert secret not in caplog.text
         assert "[REDACTED]" in caplog.text
+
+    def test_preconfigured_package_handler_receives_redacted_records(self, _restore_package_handlers):
+        root = logging.getLogger("wg21_wiki_mcp")
+        captured: list[str] = []
+
+        class CaptureHandler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                captured.append(record.getMessage())
+
+        # Host attached an emitting handler before the library safety hook ran.
+        root.handlers.insert(0, CaptureHandler())
+        _install_package_log_safety(root)
+
+        secret = "preconfig-handler-secret-value"
+        register_redactions(secret)
+        get_logger("preconfig_test").warning("leak %s", secret)
+
+        assert captured
+        assert secret not in captured[0]
+        assert "[REDACTED]" in captured[0]
 
 
 class TestAuthFailureMessages:

@@ -22,11 +22,27 @@ class _SilentHandler(logging.Handler):
         pass
 
 
-_root = logging.getLogger(_PACKAGE)
-if not any(isinstance(handler, _SilentHandler) for handler in _root.handlers):
-    _handler = _SilentHandler()
-    _handler.addFilter(_LOG_FILTER)
-    _root.addHandler(_handler)
+_SILENT_HANDLER: _SilentHandler | None = None
+
+
+def _install_package_log_safety(logger: logging.Logger | None = None) -> None:
+    """Ensure ``LogSafetyFilter`` runs before any package handler emits a record."""
+    global _SILENT_HANDLER
+    root = logger or logging.getLogger(_PACKAGE)
+
+    silent = _SILENT_HANDLER
+    if silent is None:
+        silent = _SilentHandler()
+        silent.addFilter(_LOG_FILTER)
+        _SILENT_HANDLER = silent
+
+    # Insert first: LogSafetyFilter mutates the record in place before later handlers.
+    if silent in root.handlers:
+        root.handlers.remove(silent)
+    root.handlers.insert(0, silent)
+
+
+_install_package_log_safety()
 
 
 def get_logger(name: str) -> logging.Logger:
