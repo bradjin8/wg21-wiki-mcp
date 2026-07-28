@@ -51,7 +51,7 @@ transition while fork-or-rewrite succession work is scheduled:
 |-------|-------|
 | **Artifact** | [`config/mwclient-release-age-waiver.json`](../config/mwclient-release-age-waiver.json) |
 | **Expires** | **2026-08-13** (day after the expected hard-trigger window) |
-| **Tracking issue** | [#85](https://github.com/cppalliance/wg21-wiki-mcp/issues/85) — `mwclient` fork or `requests`-only `WikiClient` rewrite |
+| **Tracking issue** | [#88](https://github.com/cppalliance/wg21-wiki-mcp/issues/88) — `mwclient` fork or `requests`-only `WikiClient` rewrite |
 | **Waiver issue** | [#84](https://github.com/cppalliance/wg21-wiki-mcp/issues/84) |
 
 `scripts/check_mwclient_release_age.py` accepts `--waiver-file` (preferred in CI)

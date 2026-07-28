@@ -255,7 +255,7 @@ def test_committed_waiver_artifact_is_valid() -> None:
     waiver = load_waiver_file(waiver_path)
 
     assert waiver.expires_on == date(2026, 8, 13)
-    assert "85" in waiver.tracking_issue
+    assert "88" in waiver.tracking_issue
     assert waiver.reason.strip()
 
 
