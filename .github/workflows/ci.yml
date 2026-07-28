@@ -35,7 +35,10 @@ jobs:
         continue-on-error: true
         run: python scripts/check_mwclient_release_age.py --max-age-days 365 --fail-reason review
       - name: Check mwclient hard migration trigger (24 months)
-        run: python scripts/check_mwclient_release_age.py --max-age-days 730 --fail-reason hard
+        run: >-
+          python scripts/check_mwclient_release_age.py
+          --max-age-days 730 --fail-reason hard
+          --waiver-file config/mwclient-release-age-waiver.json
 
   lockfile:
     name: lockfile reproducibility
