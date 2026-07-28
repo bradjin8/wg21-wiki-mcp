@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -16,7 +16,10 @@ _mod = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = _mod
 _spec.loader.exec_module(_mod)
 latest_release_date = _mod.latest_release_date
+load_waiver_file = _mod.load_waiver_file
 main = _mod.main
+resolve_waiver = _mod.resolve_waiver
+waiver_status = _mod.waiver_status
 _failure_message = _mod._failure_message
 
 
@@ -145,3 +148,125 @@ def test_review_gate_failure_message_misconfigured() -> None:
     msg = _failure_message(fail_reason="review", age_days=200, max_age_days=30)
     assert "GATE MISCONFIGURED" in msg
     assert "REVIEW TRIGGER" not in msg
+
+
+def test_load_waiver_file_reads_committed_artifact(tmp_path: Path) -> None:
+    waiver_path = tmp_path / "waiver.json"
+    waiver_path.write_text(
+        '{"expires_on": "2026-08-08", "reason": "test", "tracking_issue": "https://example.com/85"}',
+        encoding="utf-8",
+    )
+
+    waiver = load_waiver_file(waiver_path)
+
+    assert waiver.expires_on.isoformat() == "2026-08-08"
+    assert waiver.reason == "test"
+    assert waiver.tracking_issue == "https://example.com/85"
+
+
+def test_resolve_waiver_rejects_both_flags() -> None:
+    with pytest.raises(ValueError, match="only one"):
+        resolve_waiver(waiver_file="a.json", waiver_until="2026-08-08")
+
+
+def test_hard_gate_bypassed_with_active_waiver(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    old = (datetime.now(timezone.utc) - timedelta(days=800)).isoformat()
+    _mock_pypi(monkeypatch, old)
+    future = (datetime.now(timezone.utc) + timedelta(days=7)).date().isoformat()
+
+    assert (
+        main(
+            [
+                "--max-age-days",
+                "730",
+                "--fail-reason",
+                "hard",
+                "--waiver-until",
+                future,
+            ]
+        )
+        == 0
+    )
+
+    out = capsys.readouterr().out
+    assert "WAIVER:" in out
+    assert "hard gate waived" in out
+
+
+def test_review_gate_not_bypassed_with_active_waiver(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    old = (datetime.now(timezone.utc) - timedelta(days=400)).isoformat()
+    _mock_pypi(monkeypatch, old)
+    future = (datetime.now(timezone.utc) + timedelta(days=7)).date().isoformat()
+
+    assert (
+        main(
+            [
+                "--max-age-days",
+                "365",
+                "--fail-reason",
+                "review",
+                "--waiver-until",
+                future,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    assert "WAIVER:" not in captured.out
+    assert "REVIEW TRIGGER" in captured.err
+
+
+def test_hard_gate_fails_after_waiver_expires(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    old = (datetime.now(timezone.utc) - timedelta(days=800)).isoformat()
+    _mock_pypi(monkeypatch, old)
+    past = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
+
+    assert (
+        main(
+            [
+                "--max-age-days",
+                "730",
+                "--fail-reason",
+                "hard",
+                "--waiver-until",
+                past,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    assert "WAIVER EXPIRED" in captured.err
+    assert "HARD TRIGGER" in captured.err
+
+
+def test_committed_waiver_artifact_is_valid() -> None:
+    waiver_path = Path(__file__).resolve().parents[1] / "config" / "mwclient-release-age-waiver.json"
+    waiver = load_waiver_file(waiver_path)
+
+    assert waiver.expires_on == date(2026, 8, 13)
+    assert "88" in waiver.tracking_issue
+    assert waiver.reason.strip()
+
+
+def test_waiver_status_active_and_expired() -> None:
+    today = date(2026, 7, 28)
+    waiver = _mod.Waiver(
+        expires_on=date(2026, 8, 8),
+        reason="test",
+        tracking_issue="https://example.com/85",
+    )
+
+    assert waiver_status(waiver, today) == "active"
+    assert waiver_status(waiver, date(2026, 8, 8)) == "active"
+    assert waiver_status(waiver, date(2026, 8, 9)) == "expired"

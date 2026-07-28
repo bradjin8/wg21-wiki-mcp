@@ -10,7 +10,11 @@ for the pre-1.0 API stability policy and deprecation timeline.
 
 ## [Unreleased]
 
-_(none)_
+### Added
+- Dated CI waiver for the `mwclient` 24-month PyPI release-age hard gate
+  (`config/mwclient-release-age-waiver.json`, expires **2026-08-13**); tracks
+  succession work in issue [#88](https://github.com/cppalliance/wg21-wiki-mcp/issues/88).
+  `scripts/check_mwclient_release_age.py` accepts `--waiver-file` / `--waiver-until`.
 
 ## [0.3.0] - 2026-07-24
 

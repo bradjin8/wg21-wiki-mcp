@@ -1,0 +1,5 @@
+{
+  "expires_on": "2026-08-13",
+  "reason": "mwclient 0.11.0 reaches the documented 24-month PyPI release-age hard trigger around 2026-08-12 with no newer upstream release to bump to. This waiver keeps CI unblocked through that transition while the fork-or-rewrite succession work is scheduled.",
+  "tracking_issue": "https://github.com/cppalliance/wg21-wiki-mcp/issues/88"
+}

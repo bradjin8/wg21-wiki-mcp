@@ -40,10 +40,29 @@ CI runs `scripts/check_mwclient_release_age.py` on every push/PR in two steps:
 | **12-month review signal** | `--max-age-days 365 --fail-reason review` | No (`continue-on-error: true`) | Surfaces the quarterly review trigger from the succession table; currently **fails** (~22 months since `0.11.0`) but does not block merges |
 | **24-month hard trigger** | `--max-age-days 730 --fail-reason hard` | **Yes** | Blocks merges when the documented migration boundary is breached (release age > 24 months or equivalent policy) |
 
+### Hard-gate waiver (2026-07-28 → 2026-08-13)
+
+`mwclient==0.11.0` was uploaded **2024-08-12**, so the 24-month hard trigger
+lands around **2026-08-12** with no newer PyPI release to bump to. CI passes a
+committed waiver artifact to the hard gate so merges stay unblocked through that
+transition while fork-or-rewrite succession work is scheduled:
+
+| Field | Value |
+|-------|-------|
+| **Artifact** | [`config/mwclient-release-age-waiver.json`](../config/mwclient-release-age-waiver.json) |
+| **Expires** | **2026-08-13** (day after the expected hard-trigger window) |
+| **Tracking issue** | [#88](https://github.com/cppalliance/wg21-wiki-mcp/issues/88) — `mwclient` fork or `requests`-only `WikiClient` rewrite |
+| **Waiver issue** | [#84](https://github.com/cppalliance/wg21-wiki-mcp/issues/84) |
+
+`scripts/check_mwclient_release_age.py` accepts `--waiver-file` (preferred in CI)
+or `--waiver-until` (scratch/testing). While the waiver is active, only the
+**hard** step (`--fail-reason hard`) is bypassed; once `expires_on` passes, the
+gate fails normally. The 12-month review signal step is **not** waived.
+
 A blocking CVE on the pinned release would also force migration per the succession table;
 that case is handled by maintainer review and Dependabot/OSV monitoring until an
 automated CVE gate is added. The hard age gate is **green** today (`0.11.0` is under
-24 months).
+24 months) and remains green through the waiver window.
 
 Dependabot opens weekly runtime-dependency PRs (`/.github/dependabot.yml`), which
 surface new `mwclient` releases when they ship.
@@ -137,7 +156,7 @@ Fork should track the abstraction boundary table and publish an internal tag onl
 - **Dependabot:** weekly pip updates for `mwclient`
 - **Lockfile:** `requirements-lock.txt` pins exact `mwclient==0.11.0`; lockfile job fails if stale
 - **Manual:** `python scripts/check_mwclient_release_age.py` (optional `--max-age-days N`,
-  `--fail-reason review|hard`)
+  `--fail-reason review|hard`, `--waiver-file config/mwclient-release-age-waiver.json`)
 
 ## References
 
