@@ -193,7 +193,34 @@ def test_hard_gate_bypassed_with_active_waiver(
 
     out = capsys.readouterr().out
     assert "WAIVER:" in out
-    assert "hard migration gate waived" in out
+    assert "hard gate waived" in out
+
+
+def test_review_gate_not_bypassed_with_active_waiver(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    old = (datetime.now(timezone.utc) - timedelta(days=400)).isoformat()
+    _mock_pypi(monkeypatch, old)
+    future = (datetime.now(timezone.utc) + timedelta(days=7)).date().isoformat()
+
+    assert (
+        main(
+            [
+                "--max-age-days",
+                "365",
+                "--fail-reason",
+                "review",
+                "--waiver-until",
+                future,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    assert "WAIVER:" not in captured.out
+    assert "REVIEW TRIGGER" in captured.err
 
 
 def test_hard_gate_fails_after_waiver_expires(
@@ -227,7 +254,7 @@ def test_committed_waiver_artifact_is_valid() -> None:
     waiver_path = Path(__file__).resolve().parents[1] / "config" / "mwclient-release-age-waiver.json"
     waiver = load_waiver_file(waiver_path)
 
-    assert waiver.expires_on == date(2026, 8, 8)
+    assert waiver.expires_on == date(2026, 8, 13)
     assert "85" in waiver.tracking_issue
     assert waiver.reason.strip()
 

@@ -94,7 +94,7 @@ def resolve_waiver(
 
 
 def waiver_status(waiver: Waiver, today: date) -> str:
-    """Return ``active``, ``expired``, or ``not_yet_active`` for ``waiver`` on ``today``."""
+    """Return ``active`` or ``expired`` for ``waiver`` on ``today``."""
     if today > waiver.expires_on:
         return "expired"
     return "active"
@@ -166,9 +166,9 @@ def _failure_message(
     )
 
 
-def _print_waiver_bypass(waiver: Waiver, *, today: date) -> None:
+def _print_waiver_bypass(waiver: Waiver, *, today: date, fail_reason: str) -> None:
     print(
-        f"WAIVER: {waiver.expires_on.isoformat()} hard migration gate waived "
+        f"WAIVER: {waiver.expires_on.isoformat()} {fail_reason} gate waived "
         f"({(waiver.expires_on - today).days} day(s) remaining)"
     )
     print(f"Reason: {waiver.reason}")
@@ -223,10 +223,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"mwclient {version} released {released.date().isoformat()} ({age_days} days ago)")
 
     if age_days > args.max_age_days:
-        if waiver is not None:
+        if waiver is not None and args.fail_reason == "hard":
             status = waiver_status(waiver, today)
             if status == "active":
-                _print_waiver_bypass(waiver, today=today)
+                _print_waiver_bypass(waiver, today=today, fail_reason=args.fail_reason)
                 print(
                     f"OK: release age exceeds {args.max_age_days}-day threshold "
                     f"but active waiver defers the {args.fail_reason} gate"
