@@ -6,12 +6,16 @@ import threading
 import time
 import types
 
+import mwclient
 import pytest
 from mwclient.errors import APIError, LoginError
 
 from wg21_wiki_mcp import wiki_client as wc
 from wg21_wiki_mcp.config import Config, Credentials
 from wg21_wiki_mcp.models import AuthError
+
+MWCLIENT_DEFAULT_REQUEST_OPTS: dict[str, object] = {"timeout": 30}
+_FAKE_API_HTTP_URL = "http://test.example/w/api.php"
 
 
 @pytest.fixture(autouse=True)
@@ -34,7 +38,10 @@ class FakeSite:
         self.clientlogin_status = clientlogin_status
         self._api_func = api_func
         self.login_count = 0
-        self.requests: dict = {}
+        self.requests: dict = dict(MWCLIENT_DEFAULT_REQUEST_OPTS)
+
+        def _default_request(*_a, **_k):
+            return types.SimpleNamespace(ok=True)
 
         def _conn_get(*_a, **_k):
             if saml_fails:
@@ -44,6 +51,7 @@ class FakeSite:
         self.connection = types.SimpleNamespace(
             get=_conn_get,
             post=lambda *a, **k: None,
+            request=_default_request,
             cookies={},
             close=lambda: None,
         )
@@ -68,13 +76,72 @@ class FakeSite:
         if action == "query" and params.get("meta") == "userinfo":
             return {"query": {"userinfo": {"name": "Acct"}}}
         if self._api_func is not None:
-            return self._api_func(action, params)
-        return {"ok": 1}
+            result = self._api_func(action, params)
+        else:
+            result = {"ok": 1}
+        self.connection.request("GET", _FAKE_API_HTTP_URL, **dict(self.requests))
+        return result
 
 
 def _patch_sites(monkeypatch, client, sites):
     seq = iter(sites)
     monkeypatch.setattr(client, "_new_site", lambda: next(seq))
+
+
+def test_new_site_installs_per_call_request_timeout(tmp_path, monkeypatch):
+    """_new_site wires session.request so scoped API deadlines override mwclient's default timeout=30."""
+    import responses
+
+    real_site = mwclient.Site
+
+    def site_factory(*args, **kwargs):
+        kwargs["do_init"] = False
+        return real_site(*args, **kwargs)
+
+    monkeypatch.setattr(mwclient, "Site", site_factory)
+
+    client = wc.WikiClient(_config(tmp_path))
+    site = client._new_site()
+    assert site.requests.get("timeout") == 30
+
+    url = "http://test.example/"
+    recorded: list[object] = []
+    wrapped = site.connection.request
+    assert wrapped.__closure__ is not None
+    orig_request = wrapped.__closure__[0].cell_contents
+
+    def recording_orig(method, url, **kwargs):
+        recorded.append(kwargs.get("timeout"))
+        return orig_request(method, url, **kwargs)
+
+    wrapped.__closure__[0].cell_contents = recording_orig
+
+    with responses.RequestsMock() as rsps:
+        rsps.add(responses.GET, url, body="ok")
+        with client._api_request_timeout_scope(time.monotonic() + 5.0):
+            site.connection.request("GET", url, timeout=30)
+        assert len(rsps.calls) == 1
+        assert len(recorded) == 1
+        assert recorded[0] == pytest.approx(5.0, rel=0.2)
+
+
+def test_fake_site_api_forwards_default_timeout_and_scope_overrides(tmp_path, monkeypatch):
+    seen: list[object] = []
+
+    def recording_request(_method, _url, **kwargs):
+        seen.append(kwargs.get("timeout"))
+        return types.SimpleNamespace(ok=True)
+
+    site = FakeSite(api_func=lambda _a, _p: {"ok": 1})
+    site.connection.request = recording_request  # type: ignore[method-assign]
+    wc._install_per_call_request_timeout(site.connection)  # type: ignore[arg-type]
+    client = wc.WikiClient(_config(tmp_path))
+    _patch_sites(monkeypatch, client, [site])
+    client.login()
+    client.api("query", timeout=3.0)
+    assert len(seen) == 1
+    assert seen[0] == pytest.approx(3.0, rel=0.1)
+    assert site.requests.get("timeout") == 30
 
 
 # --- url helpers ----------------------------------------------------------
@@ -186,7 +253,7 @@ def test_api_non_query_uses_write_lock(tmp_path, monkeypatch):
     assert read_calls == []
 
 
-def test_api_timed_query_uses_write_lock(tmp_path, monkeypatch):
+def test_api_timed_query_uses_read_lock(tmp_path, monkeypatch):
     from contextlib import contextmanager
 
     client = wc.WikiClient(_config(tmp_path))
@@ -214,8 +281,8 @@ def test_api_timed_query_uses_write_lock(tmp_path, monkeypatch):
     monkeypatch.setattr(client._lock, "write", tracked_write)
 
     assert client.api("query", timeout=0.5) == {"ok": 1}
-    assert write_calls == [1]
-    assert read_calls == []
+    assert read_calls == [1]
+    assert write_calls == []
 
 
 def test_relogin_on_readapidenied(tmp_path, monkeypatch):
@@ -259,6 +326,73 @@ def test_concurrent_query_api_calls_do_not_serialize(tmp_path, monkeypatch):
             assert fut.result(timeout=5) == {"ok": 1}
     elapsed = time.monotonic() - t0
     assert elapsed < api_delay * 1.75
+
+
+def test_concurrent_timed_query_api_calls_do_not_serialize(tmp_path, monkeypatch):
+    """Two concurrent timed query api() calls overlap instead of serializing on the lock."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    api_delay = 0.2
+    entered = threading.Barrier(2, timeout=5)
+
+    def api_func(action, params):
+        entered.wait()
+        time.sleep(api_delay)
+        return {"ok": 1}
+
+    client = wc.WikiClient(_config(tmp_path))
+    _patch_sites(monkeypatch, client, [FakeSite(api_func=api_func)])
+    client.login()
+
+    t0 = time.monotonic()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(client.api, "query", timeout=5.0) for _ in range(2)]
+        for fut in futures:
+            assert fut.result(timeout=5) == {"ok": 1}
+    elapsed = time.monotonic() - t0
+    assert elapsed < api_delay * 1.75
+
+
+def test_timed_query_request_timeout_isolated_per_call(tmp_path, monkeypatch):
+    """Per-call timeouts reach session.request without mutating site.requests."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    barrier = threading.Barrier(2, timeout=5)
+    timeouts_by_thread: dict[int, float] = {}
+    record_lock = threading.Lock()
+
+    def api_func(action, params):
+        barrier.wait()
+        return {"ok": 1}
+
+    site = FakeSite(api_func=api_func)
+
+    def recording_request(method, url, **kwargs):
+        timeout = kwargs.get("timeout")
+        assert timeout is not None
+        with record_lock:
+            timeouts_by_thread[threading.get_ident()] = float(timeout)
+        return types.SimpleNamespace(ok=True)
+
+    site.connection.request = recording_request  # type: ignore[attr-defined]
+    wc._install_per_call_request_timeout(site.connection)  # type: ignore[arg-type]
+
+    client = wc.WikiClient(_config(tmp_path))
+    _patch_sites(monkeypatch, client, [site])
+    client.login()
+    assert site.requests.get("timeout") == 30
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f1 = pool.submit(client.api, "query", timeout=3.0)
+        f2 = pool.submit(client.api, "query", timeout=7.0)
+        assert f1.result(timeout=5) == {"ok": 1}
+        assert f2.result(timeout=5) == {"ok": 1}
+
+    assert len(timeouts_by_thread) == 2
+    recorded = sorted(timeouts_by_thread.values())
+    assert recorded[0] == pytest.approx(3.0, rel=0.1)
+    assert recorded[1] == pytest.approx(7.0, rel=0.1)
+    assert site.requests.get("timeout") == 30
 
 
 def test_rwlock_blocks_new_readers_while_writer_waits():
@@ -442,14 +576,42 @@ def test_api_timeout_raises_fetch_error_after_retry(tmp_path, monkeypatch):
     assert calls["n"] >= 1
 
 
-def test_api_timeout_restores_absent_request_timeout(tmp_path, monkeypatch):
+def test_api_timeout_preserves_default_request_timeout(tmp_path, monkeypatch):
     site = FakeSite(api_func=lambda _a, _p: {"ok": 1})
     client = wc.WikiClient(_config(tmp_path))
     _patch_sites(monkeypatch, client, [site])
     client.login()
-    assert "timeout" not in site.requests
+    assert site.requests.get("timeout") == 30
     client.api("query", timeout=0.5)
-    assert "timeout" not in site.requests
+    assert site.requests.get("timeout") == 30
+
+
+def test_session_request_override_requires_active_flag():
+    """API deadline ContextVar does not override explicit timeouts unless scope is active."""
+    seen: dict[str, object] = {}
+
+    def orig(_method, _url, **kwargs):
+        seen["timeout"] = kwargs.get("timeout")
+        return types.SimpleNamespace(ok=True)
+
+    session = types.SimpleNamespace(request=orig)
+    wc._install_per_call_request_timeout(session)  # type: ignore[arg-type]
+    token = wc._API_REQUEST_TIMEOUT.set(1.0)
+    try:
+        session.request("GET", "http://test.example/", timeout=99.0)
+    finally:
+        wc._API_REQUEST_TIMEOUT.reset(token)
+    assert seen["timeout"] == 99.0
+
+
+def test_api_timed_non_query_restores_absent_request_timeout(tmp_path, monkeypatch):
+    site = FakeSite(api_func=lambda _a, _p: {"ok": "mutate"})
+    client = wc.WikiClient(_config(tmp_path))
+    _patch_sites(monkeypatch, client, [site])
+    client.login()
+    assert site.requests.get("timeout") == 30
+    client.api("edit", timeout=0.5)
+    assert site.requests.get("timeout") == 30
 
 
 def test_api_timeout_skips_relogin_when_budget_exhausted(tmp_path, monkeypatch):
@@ -522,4 +684,4 @@ def test_bot_login_applies_site_request_timeout(tmp_path, monkeypatch):
     assert cred is not None
     client._bot_login(cred, deadline=time.monotonic() + 5.0)
     assert seen and seen[0] is not None
-    assert "timeout" not in site.requests
+    assert site.requests.get("timeout") == 30
