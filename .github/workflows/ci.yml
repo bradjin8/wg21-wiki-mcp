@@ -206,8 +206,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
-      - name: Canary smoke (login + one read-only tool; skip if no secrets)
+      - name: Canary smoke (login + one read-only tool)
         env:
+          CI_REQUIRE_LIVE_CREDS: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && '1' || '' }}
           WIKI_BOT_USERNAME: ${{ secrets.WIKI_BOT_USERNAME }}
           WIKI_BOT_PASSWORD: ${{ secrets.WIKI_BOT_PASSWORD }}
           WIKI_USER_USERNAME: ${{ secrets.WIKI_USER_USERNAME }}
@@ -282,8 +283,9 @@ jobs:
       # --no-cov: offline matrix already enforces the 95% package gate and per-module
       # floors; live tests hit the real wiki (slow, credential-bound) and must not emit
       # coverage artifacts that could correlate execution with confidential page access.
-      - name: Live tests (fail when credentials present; skip when absent)
+      - name: Live tests (fail on protected CI when credentials missing or wiki blocked)
         env:
+          CI_REQUIRE_LIVE_CREDS: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && '1' || '' }}
           WIKI_BOT_USERNAME: ${{ secrets.WIKI_BOT_USERNAME }}
           WIKI_BOT_PASSWORD: ${{ secrets.WIKI_BOT_PASSWORD }}
           WIKI_USER_USERNAME: ${{ secrets.WIKI_USER_USERNAME }}

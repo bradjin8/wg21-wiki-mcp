@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 
 import pytest
@@ -10,7 +11,7 @@ import requests
 
 from wg21_wiki_mcp.config import Config
 from wg21_wiki_mcp.context import ServerContext
-from wg21_wiki_mcp.errors import AuthError
+from wg21_wiki_mcp.errors import AuthError, ConfigError
 
 _log = logging.getLogger(__name__)
 
@@ -34,6 +35,31 @@ _NETWORK_AUTH_FAILURE_TYPES = frozenset(
     }
 )
 _AUTH_PATH_FAILURE_RE = re.compile(r"\b(?:bot|user): (\w+)")
+
+
+def live_creds_required() -> bool:
+    """True when protected CI expects wiki credentials (``CI_REQUIRE_LIVE_CREDS``)."""
+    raw = os.environ.get("CI_REQUIRE_LIVE_CREDS", "").strip().lower()
+    return raw in {"1", "true", "yes"}
+
+
+def live_credentials_configured() -> bool:
+    """True when credentials are available (honors local ``.env`` like :meth:`Config.from_env`)."""
+    try:
+        Config.from_env()
+        return True
+    except ConfigError:
+        return False
+
+
+def assert_live_requirements_met() -> None:
+    """Fail fast when protected CI is missing wiki credentials."""
+    if live_creds_required() and not live_credentials_configured():
+        pytest.fail(
+            "CI_REQUIRE_LIVE_CREDS is set but wiki credentials are not configured. "
+            "Set WIKI_BOT_USERNAME/WIKI_BOT_PASSWORD and/or "
+            "WIKI_USER_USERNAME/WIKI_USER_PASSWORD in the live-wiki GitHub environment."
+        )
 
 
 def auth_error_waf_status(exc: AuthError) -> int | None:
@@ -83,23 +109,34 @@ def skip_reason_waf_edge(status: int, *, url: str) -> str:
     return f"wiki edge returned HTTP {status} for {url} (WAF/CDN block of this runner; not a credential fault)"
 
 
+def _fail_or_skip_live_block(reason: str, *, waf_status: int | None = None, url: str | None = None) -> None:
+    """Fail on protected CI; skip gracefully on fork PRs and local runs."""
+    if live_creds_required():
+        pytest.fail(reason)
+    if waf_status is not None and url is not None:
+        log_waf_edge_skip(waf_status, url=url)
+    pytest.skip(reason)
+
+
 def ensure_wiki_login(ctx: ServerContext) -> None:
-    """Log in, or skip live tests on WAF blocks / network faults (not bad credentials)."""
+    """Log in, or skip/fail live tests on WAF blocks / network faults (not bad credentials)."""
     blocked = probe_wiki_waf_block(ctx.config)
     if blocked is not None:
         status, url = blocked
-        log_waf_edge_skip(status, url=url)
-        pytest.skip(skip_reason_waf_edge(status, url=url))
+        _fail_or_skip_live_block(skip_reason_waf_edge(status, url=url), waf_status=status, url=url)
 
     try:
         ctx.login()
     except AuthError as exc:
         waf_status = auth_error_waf_status(exc)
         if waf_status is not None:
-            log_waf_edge_skip(waf_status, url=ctx.config.base_url)
-            pytest.skip(skip_reason_waf_edge(waf_status, url=ctx.config.base_url))
+            _fail_or_skip_live_block(
+                skip_reason_waf_edge(waf_status, url=ctx.config.base_url),
+                waf_status=waf_status,
+                url=ctx.config.base_url,
+            )
         if auth_error_is_unreachable(exc):
-            pytest.skip(
+            _fail_or_skip_live_block(
                 "wiki.isocpp.org is unreachable from this shell (network error on all auth paths); "
                 "credentials loaded but TCP/TLS failed — retry when the wiki is reachable or check VPN/proxy"
             )

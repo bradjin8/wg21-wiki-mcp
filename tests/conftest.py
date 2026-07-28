@@ -23,6 +23,13 @@ from wg21_wiki_mcp.wiki_client import FetchedPage
 BASE_URL = "https://wiki.example.org"
 
 
+def pytest_runtest_setup(item):
+    from live_support import assert_live_requirements_met
+
+    if item.get_closest_marker("live") or item.get_closest_marker("canary"):
+        assert_live_requirements_met()
+
+
 @dataclass
 class FakePage:
     content: str
