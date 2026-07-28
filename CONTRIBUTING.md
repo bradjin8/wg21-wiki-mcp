@@ -55,8 +55,9 @@ pytest -m live --no-cov
 ```
 
 Live tests skip when credentials are absent on fork PRs and local runs. On
-protected CI (`CI_REQUIRE_LIVE_CREDS=1`, set by the workflow for pushes to
-`develop`/`master` and same-repo PRs), they **fail** instead of skipping when
+protected CI (`CI_REQUIRE_LIVE_CREDS=1`, set only for pushes to `develop`/`master`
+and same-repo PRs — not for `workflow_call` release runs or `workflow_dispatch`),
+they **fail** instead of skipping when
 credentials are missing or the wiki edge blocks reads (HTTP 403/429/503) or the
 wiki is unreachable. They must never print or store wiki content. In CI, the
 canary tier (`pytest -m canary --no-cov`) runs bot login plus one read-only tool

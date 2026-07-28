@@ -62,6 +62,11 @@ def assert_live_requirements_met() -> None:
         )
 
 
+def live_tier_should_skip() -> bool:
+    """True when live/canary tests should skip for missing credentials (fork/local only)."""
+    return not live_credentials_configured() and not live_creds_required()
+
+
 def auth_error_waf_status(exc: AuthError) -> int | None:
     """Return a WAF/edge block status code embedded in ``exc``, if any."""
     message = str(exc)

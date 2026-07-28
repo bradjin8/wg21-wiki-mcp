@@ -14,6 +14,7 @@ from live_support import (
     ensure_wiki_login,
     live_credentials_configured,
     live_creds_required,
+    live_tier_should_skip,
     probe_wiki_waf_block,
 )
 
@@ -96,7 +97,8 @@ def test_probe_wiki_waf_block_checks_pluggable_auth_when_api_ok(tmp_path):
 
 
 @responses.activate
-def test_ensure_wiki_login_skips_on_waf_probe(tmp_path, caplog):
+def test_ensure_wiki_login_skips_on_waf_probe(tmp_path, caplog, monkeypatch):
+    monkeypatch.delenv("CI_REQUIRE_LIVE_CREDS", raising=False)
     config = _config(tmp_path)
     ctx = ServerContext.create(config)
     responses.add(responses.GET, re.compile(r"https://w\.example/api\.php"), status=429, body="rate limited")
@@ -110,6 +112,7 @@ def test_ensure_wiki_login_skips_on_waf_probe(tmp_path, caplog):
 
 
 def test_ensure_wiki_login_skips_on_waf_auth_error(tmp_path, caplog, monkeypatch):
+    monkeypatch.delenv("CI_REQUIRE_LIVE_CREDS", raising=False)
     config = _config(tmp_path)
     ctx = ServerContext.create(config)
     monkeypatch.setattr("live_support.probe_wiki_waf_block", lambda _config: None)
@@ -169,6 +172,24 @@ def test_live_credentials_configured_true_with_bot_creds(monkeypatch, tmp_path):
     monkeypatch.setenv("WIKI_BOT_PASSWORD", "secret")
     monkeypatch.setenv("ISOCPP_WIKI_CACHE_DIR", str(tmp_path / "cache"))
     assert live_credentials_configured() is True
+
+
+@pytest.mark.parametrize(
+    ("configured", "required", "expected"),
+    [
+        (True, True, False),
+        (True, False, False),
+        (False, True, False),
+        (False, False, True),
+    ],
+)
+def test_live_tier_should_skip_all_combinations(monkeypatch, configured: bool, required: bool, expected: bool):
+    monkeypatch.setattr("live_support.live_credentials_configured", lambda: configured)
+    if required:
+        monkeypatch.setenv("CI_REQUIRE_LIVE_CREDS", "1")
+    else:
+        monkeypatch.delenv("CI_REQUIRE_LIVE_CREDS", raising=False)
+    assert live_tier_should_skip() is expected
 
 
 @responses.activate

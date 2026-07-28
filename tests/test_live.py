@@ -14,7 +14,7 @@ import os
 from typing import TYPE_CHECKING
 
 import pytest
-from live_support import ensure_wiki_login, live_credentials_configured, live_creds_required
+from live_support import ensure_wiki_login, live_tier_should_skip
 
 from wg21_wiki_mcp import tools
 from wg21_wiki_mcp.cache import Cache
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.live
 
 skip_no_creds = pytest.mark.skipif(
-    not live_credentials_configured() and not live_creds_required(),
+    live_tier_should_skip(),
     reason="no wiki credentials configured",
 )
 
