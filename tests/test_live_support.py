@@ -8,9 +8,13 @@ import re
 import pytest
 import responses
 from live_support import (
+    assert_live_requirements_met,
     auth_error_is_unreachable,
     auth_error_waf_status,
     ensure_wiki_login,
+    live_credentials_configured,
+    live_creds_required,
+    live_tier_should_skip,
     probe_wiki_waf_block,
 )
 
@@ -93,7 +97,8 @@ def test_probe_wiki_waf_block_checks_pluggable_auth_when_api_ok(tmp_path):
 
 
 @responses.activate
-def test_ensure_wiki_login_skips_on_waf_probe(tmp_path, caplog):
+def test_ensure_wiki_login_skips_on_waf_probe(tmp_path, caplog, monkeypatch):
+    monkeypatch.delenv("CI_REQUIRE_LIVE_CREDS", raising=False)
     config = _config(tmp_path)
     ctx = ServerContext.create(config)
     responses.add(responses.GET, re.compile(r"https://w\.example/api\.php"), status=429, body="rate limited")
@@ -107,6 +112,7 @@ def test_ensure_wiki_login_skips_on_waf_probe(tmp_path, caplog):
 
 
 def test_ensure_wiki_login_skips_on_waf_auth_error(tmp_path, caplog, monkeypatch):
+    monkeypatch.delenv("CI_REQUIRE_LIVE_CREDS", raising=False)
     config = _config(tmp_path)
     ctx = ServerContext.create(config)
     monkeypatch.setattr("live_support.probe_wiki_waf_block", lambda _config: None)
@@ -122,3 +128,129 @@ def test_ensure_wiki_login_skips_on_waf_auth_error(tmp_path, caplog, monkeypatch
     finally:
         ctx.close()
     assert "HTTP 403" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("1", True),
+        ("true", True),
+        ("TRUE", True),
+        ("yes", True),
+        ("YES", True),
+        ("0", False),
+        ("", False),
+        ("no", False),
+    ],
+)
+def test_live_creds_required_truthy_parsing(monkeypatch, value: str, expected: bool):
+    monkeypatch.setenv("CI_REQUIRE_LIVE_CREDS", value)
+    assert live_creds_required() is expected
+
+
+def test_live_creds_required_false_when_unset(monkeypatch):
+    monkeypatch.delenv("CI_REQUIRE_LIVE_CREDS", raising=False)
+    assert live_creds_required() is False
+
+
+def test_assert_live_requirements_met_noop_when_not_required(monkeypatch):
+    monkeypatch.delenv("CI_REQUIRE_LIVE_CREDS", raising=False)
+    monkeypatch.delenv("WIKI_BOT_USERNAME", raising=False)
+    monkeypatch.delenv("WIKI_BOT_PASSWORD", raising=False)
+    assert_live_requirements_met()
+
+
+def test_assert_live_requirements_met_fails_when_required_and_missing(monkeypatch):
+    monkeypatch.setenv("CI_REQUIRE_LIVE_CREDS", "1")
+    monkeypatch.setattr("live_support.live_credentials_configured", lambda: False)
+    with pytest.raises(pytest.fail.Exception, match="CI_REQUIRE_LIVE_CREDS"):
+        assert_live_requirements_met()
+
+
+def test_live_credentials_configured_true_with_bot_creds(monkeypatch, tmp_path):
+    monkeypatch.setenv("WIKI_BOT_USERNAME", "Acct@bot")
+    monkeypatch.setenv("WIKI_BOT_PASSWORD", "secret")
+    monkeypatch.setenv("ISOCPP_WIKI_CACHE_DIR", str(tmp_path / "cache"))
+    assert live_credentials_configured() is True
+
+
+@pytest.mark.parametrize(
+    ("configured", "required", "expected"),
+    [
+        (True, True, False),
+        (True, False, False),
+        (False, True, False),
+        (False, False, True),
+    ],
+)
+def test_live_tier_should_skip_all_combinations(monkeypatch, configured: bool, required: bool, expected: bool):
+    monkeypatch.setattr("live_support.live_credentials_configured", lambda: configured)
+    if required:
+        monkeypatch.setenv("CI_REQUIRE_LIVE_CREDS", "1")
+    else:
+        monkeypatch.delenv("CI_REQUIRE_LIVE_CREDS", raising=False)
+    assert live_tier_should_skip() is expected
+
+
+@responses.activate
+def test_ensure_wiki_login_fails_on_waf_probe_when_required(tmp_path, monkeypatch):
+    monkeypatch.setenv("CI_REQUIRE_LIVE_CREDS", "1")
+    config = _config(tmp_path)
+    ctx = ServerContext.create(config)
+    responses.add(responses.GET, re.compile(r"https://w\.example/api\.php"), status=403, body="blocked")
+    try:
+        with pytest.raises(pytest.fail.Exception, match="HTTP 403"):
+            ensure_wiki_login(ctx)
+    finally:
+        ctx.close()
+
+
+def test_ensure_wiki_login_fails_on_waf_auth_error_when_required(tmp_path, monkeypatch):
+    monkeypatch.setenv("CI_REQUIRE_LIVE_CREDS", "1")
+    config = _config(tmp_path)
+    ctx = ServerContext.create(config)
+    monkeypatch.setattr("live_support.probe_wiki_waf_block", lambda _config: None)
+
+    def _blocked_login() -> None:
+        raise AuthError("SAML SSO entry point returned HTTP error.; url=https://w.example; status=429")
+
+    ctx.client.login = _blocked_login  # type: ignore[method-assign]
+    try:
+        with pytest.raises(pytest.fail.Exception, match="HTTP 429"):
+            ensure_wiki_login(ctx)
+    finally:
+        ctx.close()
+
+
+def test_ensure_wiki_login_fails_on_network_unreachable_when_required(tmp_path, monkeypatch):
+    monkeypatch.setenv("CI_REQUIRE_LIVE_CREDS", "1")
+    config = _config(tmp_path)
+    ctx = ServerContext.create(config)
+    monkeypatch.setattr("live_support.probe_wiki_waf_block", lambda _config: None)
+
+    def _unreachable_login() -> None:
+        raise AuthError("Authentication failed (bot: ConnectionError); verify wiki credentials.")
+
+    ctx.client.login = _unreachable_login  # type: ignore[method-assign]
+    try:
+        with pytest.raises(pytest.fail.Exception, match="unreachable"):
+            ensure_wiki_login(ctx)
+    finally:
+        ctx.close()
+
+
+def test_ensure_wiki_login_skips_on_network_unreachable_when_not_required(tmp_path, monkeypatch):
+    monkeypatch.delenv("CI_REQUIRE_LIVE_CREDS", raising=False)
+    config = _config(tmp_path)
+    ctx = ServerContext.create(config)
+    monkeypatch.setattr("live_support.probe_wiki_waf_block", lambda _config: None)
+
+    def _unreachable_login() -> None:
+        raise AuthError("Authentication failed (bot: ConnectionError); verify wiki credentials.")
+
+    ctx.client.login = _unreachable_login  # type: ignore[method-assign]
+    try:
+        with pytest.raises(pytest.skip.Exception, match="unreachable"):
+            ensure_wiki_login(ctx)
+    finally:
+        ctx.close()

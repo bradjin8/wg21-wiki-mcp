@@ -54,12 +54,15 @@ credentials. To run the live tier against the real wiki, set the env vars from
 pytest -m live --no-cov
 ```
 
-Live tests auto-skip when credentials are absent and must never print or store
-wiki content. They also skip (with a logged HTTP status) when the wiki edge
-returns **403**, **429**, or **503** — typical Cloudflare/WAF blocks of CI
-runner IPs, not credential faults. In CI, the canary tier (`pytest -m canary --no-cov`) runs bot login
-plus one read-only tool call; the full live tier runs `pytest -m live --no-cov`.
-Both jobs read credentials from the `live-wiki` GitHub environment.
+Live tests skip when credentials are absent on fork PRs and local runs. On
+protected CI (`CI_REQUIRE_LIVE_CREDS=1`, set only for pushes to `develop`/`master`
+and same-repo PRs — not for `workflow_call` release runs or `workflow_dispatch`),
+they **fail** instead of skipping when
+credentials are missing or the wiki edge blocks reads (HTTP 403/429/503) or the
+wiki is unreachable. They must never print or store wiki content. In CI, the
+canary tier (`pytest -m canary --no-cov`) runs bot login plus one read-only tool
+call; the full live tier runs `pytest -m live --no-cov`. Both jobs read
+credentials from the `live-wiki` GitHub environment.
 
 ## Testing authentication paths
 
@@ -150,10 +153,12 @@ logical groupings — select each check individually when editing the ruleset.
 - **pre-commit**
 - **lockfile reproducibility**
 - **secret scan (gitleaks)**
-- **canary (secrets)** — minimal live smoke (bot login + one read-only tool) when
-  the `live-wiki` environment secrets are configured; auto-skips on forks
-- **live (secrets)** — full live wiki test suite when the `live-wiki` environment
-  secrets are configured; auto-skips on forks
+- **canary (secrets)** — minimal live smoke (bot login + one read-only tool);
+  skips on fork PRs and local runs without credentials; fails on protected CI
+  when credentials are missing or the wiki edge blocks reads
+- **live (secrets)** — full live wiki test suite; skips on fork PRs and local
+  runs without credentials; fails on protected CI when credentials are missing
+  or the wiki edge blocks reads
 - **All 12 offline matrix jobs** (3 OS × 4 Python versions) — each must be
   selected separately:
   - `offline (ubuntu-latest, py3.10)` … `offline (ubuntu-latest, py3.13)`

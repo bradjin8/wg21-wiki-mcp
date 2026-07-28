@@ -16,6 +16,12 @@ for the pre-1.0 API stability policy and deprecation timeline.
   succession work in issue [#88](https://github.com/cppalliance/wg21-wiki-mcp/issues/88).
   `scripts/check_mwclient_release_age.py` accepts `--waiver-file` / `--waiver-until`.
 
+### Changed
+- CI `canary (secrets)` and `live (secrets)` jobs fail loudly on protected CI
+  (`CI_REQUIRE_LIVE_CREDS=1`) when wiki credentials are missing or the live read
+  path is blocked (WAF edge or network unreachable); fork PRs and local runs
+  without credentials continue to skip gracefully ([#86](https://github.com/cppalliance/wg21-wiki-mcp/issues/86)).
+
 ## [0.3.0] - 2026-07-24
 
 ### Security

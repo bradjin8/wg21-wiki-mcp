@@ -60,7 +60,7 @@ packages = ["src/wg21_wiki_mcp"]
 testpaths = ["tests"]
 addopts = "--benchmark-disable --cov=wg21_wiki_mcp --cov-branch --cov-report=term-missing --cov-fail-under=95"
 markers = [
-    "live: tests that hit the real wiki using configured credentials (skipped without them)",
+    "live: tests that hit the real wiki using configured credentials (skip locally/on fork PRs; fail on protected CI when blocked)",
     "canary: minimal live smoke (bot login + one read-only tool; subset of live)",
     "latency_gate: meeting-time composite latency regressions (ubuntu/py3.12 CI gate)",
     "benchmark: cache throughput benchmarks (run with pytest --benchmark-only)",

@@ -1,8 +1,10 @@
 """Live tier: exercises the real wiki using configured secrets.
 
-These tests are skipped automatically when credentials are absent (forks/local
-stay green). They assert structurally and NEVER print or store wiki content, so
-nothing confidential leaks into logs or CI artifacts.
+These tests skip when credentials are absent on fork PRs and local runs. On
+protected CI (``CI_REQUIRE_LIVE_CREDS=1``) they fail instead of skipping when
+credentials are missing or the wiki edge blocks reads. They assert structurally
+and NEVER print or store wiki content, so nothing confidential leaks into logs
+or CI artifacts.
 """
 
 from __future__ import annotations
@@ -12,13 +14,12 @@ import os
 from typing import TYPE_CHECKING
 
 import pytest
-from live_support import ensure_wiki_login
+from live_support import ensure_wiki_login, live_tier_should_skip
 
 from wg21_wiki_mcp import tools
 from wg21_wiki_mcp.cache import Cache
 from wg21_wiki_mcp.config import Config
 from wg21_wiki_mcp.context import ServerContext
-from wg21_wiki_mcp.errors import ConfigError
 from wg21_wiki_mcp.pagination import decode_cursor
 
 if TYPE_CHECKING:
@@ -26,19 +27,10 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.live
 
-
-def _live_credentials_configured() -> bool:
-    """True when credentials are available (honors local ``.env`` like :meth:`Config.from_env`)."""
-    try:
-        Config.from_env()
-        return True
-    except ConfigError:
-        return False
-
-
-_HAS_CREDS = _live_credentials_configured()
-
-skip_no_creds = pytest.mark.skipif(not _HAS_CREDS, reason="no wiki credentials configured")
+skip_no_creds = pytest.mark.skipif(
+    live_tier_should_skip(),
+    reason="no wiki credentials configured",
+)
 
 # Generic MediaWiki landing page — not a confidential committee title.
 _LIVE_PAGE = "Main Page"
