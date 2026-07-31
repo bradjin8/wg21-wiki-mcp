@@ -10,6 +10,8 @@ for the pre-1.0 API stability policy and deprecation timeline.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-30
+
 ### Added
 - CI `canary (secrets)` and `live (secrets)` jobs reach the wiki over a TorGuard
   tunnel (`scripts/ci/torguard_vpn.sh`), because Cloudflare blocks GitHub-hosted
@@ -44,6 +46,10 @@ for the pre-1.0 API stability policy and deprecation timeline.
   checks for a tun interface and reports either a tunnel that dropped mid-run or
   an exit address that is itself blocked. The HTTP status is identical in both
   cases while the remedies differ.
+
+### Fixed
+- `WikiClient.api()`: timed `query` calls no longer take the exclusive write lock,
+  restoring concurrent read throughput ([#83](https://github.com/cppalliance/wg21-wiki-mcp/pull/83)).
 
 ## [0.3.0] - 2026-07-24
 
@@ -249,7 +255,8 @@ _(none)_
   `get_recent_changes`, `wiki_status`, with opaque cursor pagination.
 - Verbatim, provenance-bearing responses (canonical + `oldid` URLs, `revid`).
 
-[Unreleased]: https://github.com/cppalliance/wg21-wiki-mcp/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/cppalliance/wg21-wiki-mcp/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/cppalliance/wg21-wiki-mcp/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/cppalliance/wg21-wiki-mcp/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/cppalliance/wg21-wiki-mcp/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/cppalliance/wg21-wiki-mcp/compare/v0.1.0...v0.2.0

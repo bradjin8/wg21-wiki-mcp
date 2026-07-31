@@ -76,7 +76,7 @@ CHANGELOG and pinned versions for operational awareness.
 
 ## Pinning recommendations
 
-- Pin a **git tag** (e.g. `@v0.3.0`) or PyPI version in MCP host config for
+- Pin a **git tag** (e.g. `@v0.3.1`) or PyPI version in MCP host config for
   reproducible agent behavior.
 - Read [CHANGELOG.md](CHANGELOG.md) before bumping the pinned version.
 - Treat `[Unreleased]` on `develop` as preview-only, not production.
