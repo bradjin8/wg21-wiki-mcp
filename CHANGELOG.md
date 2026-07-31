@@ -10,7 +10,7 @@ for the pre-1.0 API stability policy and deprecation timeline.
 
 ## [Unreleased]
 
-## [0.3.1] - 2026-07-30
+## [0.3.1] - 2026-07-31
 
 ### Added
 - CI `canary (secrets)` and `live (secrets)` jobs reach the wiki over a TorGuard
