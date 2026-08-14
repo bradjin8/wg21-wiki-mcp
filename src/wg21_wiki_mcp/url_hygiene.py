@@ -7,7 +7,6 @@ rewrites or annotates only those legacy URLs at the tool boundary.
 
 from __future__ import annotations
 
-import ipaddress
 import re
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -151,23 +150,19 @@ def _remap_fresh(entry: tuple[str | None, str], ttl_seconds: int) -> bool:
 
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _MAX_REDIRECT_HOPS = 10
+_ALLOWED_REDIRECT_HOSTS = frozenset({"wiki.edg.com", "wiki.isocpp.org"})
 
 
 def _is_safe_redirect_target(url: str) -> bool:
     parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
+    if parsed.scheme != "https":
         return False
     host = (parsed.hostname or "").lower()
-    if not host:
+    if host not in _ALLOWED_REDIRECT_HOSTS:
         return False
-    if host == "localhost" or host.endswith(".localhost"):
+    port = parsed.port
+    if port is not None and port != 443:
         return False
-    try:
-        addr = ipaddress.ip_address(host)
-        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_multicast or addr.is_reserved:
-            return False
-    except ValueError:
-        pass
     return True
 
 

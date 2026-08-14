@@ -142,8 +142,17 @@ def test_probe_edg_stub_paths():
         status_code = 302
         headers = {"Location": "http://127.0.0.1/stub"}
 
-    with patch("wg21_wiki_mcp.url_hygiene.requests.get", return_value=UnsafeRedirect()):
+    with patch("wg21_wiki_mcp.url_hygiene.requests.get", return_value=UnsafeRedirect()) as mock_get:
         assert _probe_edg_stub(EDG_US207, user_agent="test", timeout=1.0) is None
+        assert mock_get.call_count == 1
+
+    class UntrustedHostRedirect:
+        status_code = 302
+        headers = {"Location": "https://evil.example.com/stub"}
+
+    with patch("wg21_wiki_mcp.url_hygiene.requests.get", return_value=UntrustedHostRedirect()) as mock_get:
+        assert _probe_edg_stub(EDG_US207, user_agent="test", timeout=1.0) is None
+        assert mock_get.call_count == 1
 
     with patch(
         "wg21_wiki_mcp.url_hygiene.requests.get",
