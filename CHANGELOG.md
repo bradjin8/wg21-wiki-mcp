@@ -17,6 +17,8 @@ for the pre-1.0 API stability policy and deprecation timeline.
   (initial waiver lapsed 2026-08-13; `0.11.0` remains the latest PyPI release).
 - Refreshed `benchmarks/cache-baseline.json` on CI (`ubuntu-latest`, Python 3.12) after
   adding the `url_remaps` table to the shared SQLite cache schema.
+- Stabilized cache microbenchmarks (`tests/test_benchmark.py`) with batched put/get and
+  count loops so CI regression means are ms-scale instead of µs-scale timer noise.
 
 ## [0.3.1] - 2026-07-31
 
@@ -36,7 +38,7 @@ for the pre-1.0 API stability policy and deprecation timeline.
   Rotation is documented in [docs/RUNBOOK.md](docs/RUNBOOK.md).
 - `shellcheck` lint step for `scripts/ci/*.sh` in the ubuntu/py3.12 `test` job.
 - Dated CI waiver for the `mwclient` 24-month PyPI release-age hard gate
-  (`config/mwclient-release-age-waiver.json`, expires **2026-08-13**); tracks
+  (`config/mwclient-release-age-waiver.json`); tracks
   succession work in issue [#88](https://github.com/cppalliance/wg21-wiki-mcp/issues/88).
   `scripts/check_mwclient_release_age.py` accepts `--waiver-file` / `--waiver-until`.
 - Meeting-time composite latency benchmarks (`tests/test_meeting_time_benchmark.py`),

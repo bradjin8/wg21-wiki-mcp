@@ -23,6 +23,8 @@ pytestmark = pytest.mark.benchmark
 
 _BULK_ENTRIES = 100
 _CONCURRENT_WORKERS = 8
+_PUT_GET_ROUNDS = 50
+_COUNT_ROUNDS = 500
 # ~10 KiB generic wikitext-shaped placeholder (not real wiki content).
 _WIKITEXT_10KB = "={{ synthetic | section }}\n" + ("lorem ipsum dolor sit amet " * 400)
 
@@ -48,23 +50,31 @@ def bench_cache(tmp_path: Path) -> Iterator[Cache]:
 
 @pytest.mark.benchmark(group="cache")
 def test_benchmark_cache_put_get_cycle(benchmark, bench_cache: Cache) -> None:
-    """Single-entry put followed by get (hot-path read after write)."""
+    """Repeated put/get pairs on distinct titles (hot-path read after write)."""
 
     def cycle() -> None:
-        _put_entry(bench_cache, "Bench:Alpha")
-        entry = bench_cache.get("Bench:Alpha")
-        assert entry is not None
+        for i in range(_PUT_GET_ROUNDS):
+            title = f"Bench:Alpha:{i}"
+            _put_entry(bench_cache, title)
+            entry = bench_cache.get(title)
+            assert entry is not None
 
     benchmark(cycle)
 
 
 @pytest.mark.benchmark(group="cache")
 def test_benchmark_cache_count(benchmark, bench_cache: Cache) -> None:
-    """Row count over a populated cache."""
+    """Row count over a populated cache (batched to reduce timer noise)."""
     for i in range(_BULK_ENTRIES):
         _put_entry(bench_cache, f"Bench:Page:{i}")
 
-    benchmark(bench_cache.count)
+    def count_many() -> None:
+        total = 0
+        for _ in range(_COUNT_ROUNDS):
+            total += bench_cache.count()
+        assert total == _BULK_ENTRIES * _COUNT_ROUNDS
+
+    benchmark(count_many)
 
 
 @pytest.mark.benchmark(group="cache")
