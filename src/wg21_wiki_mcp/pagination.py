@@ -10,8 +10,8 @@ from __future__ import annotations
 import base64
 import json
 
-from mcp.shared.exceptions import McpError
-from mcp.types import INVALID_PARAMS, ErrorData
+from mcp.shared.exceptions import MCPError
+from mcp.types import INVALID_PARAMS
 
 
 def encode_cursor(payload: dict) -> str:
@@ -28,17 +28,17 @@ def decode_cursor(cursor: str | None) -> dict:
         raw = base64.urlsafe_b64decode(cursor.encode("ascii"))
         value = json.loads(raw)
     except (ValueError, TypeError) as exc:
-        raise McpError(ErrorData(code=INVALID_PARAMS, message="Invalid or expired cursor.")) from exc
+        raise MCPError(INVALID_PARAMS, "Invalid or expired cursor.") from exc
     if not isinstance(value, dict):
-        raise McpError(ErrorData(code=INVALID_PARAMS, message="Invalid cursor payload."))
+        raise MCPError(INVALID_PARAMS, "Invalid cursor payload.")
     return value
 
 
 def _validated_offset(value: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise McpError(ErrorData(code=INVALID_PARAMS, message="Invalid cursor offset."))
+        raise MCPError(INVALID_PARAMS, "Invalid cursor offset.")
     if value < 0:
-        raise McpError(ErrorData(code=INVALID_PARAMS, message="Invalid cursor offset."))
+        raise MCPError(INVALID_PARAMS, "Invalid cursor offset.")
     return value
 
 
@@ -46,7 +46,7 @@ def cursor_offset(cursor: str | None, *, default: int = 0) -> int:
     """Return a non-negative integer offset from an opaque cursor payload.
 
     Raises:
-        McpError: if the cursor envelope is malformed or ``o`` is not a
+        MCPError: if the cursor envelope is malformed or ``o`` is not a
             non-negative integer.
     """
     default = _validated_offset(default)

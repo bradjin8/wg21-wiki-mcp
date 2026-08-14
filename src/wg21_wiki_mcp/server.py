@@ -1,4 +1,4 @@
-"""FastMCP server exposing the WG21 wiki tools.
+"""MCPServer exposing the WG21 wiki tools.
 
 Run via the ``wg21-wiki-mcp`` console script (or ``python -m
 wg21_wiki_mcp``). Configuration comes from the environment (see README); the
@@ -14,8 +14,8 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Any, TypeVar
 
-from mcp.server.fastmcp import FastMCP
-from mcp.shared.exceptions import McpError
+from mcp.server.mcpserver import MCPServer
+from mcp.shared.exceptions import MCPError
 
 from . import tools
 from .config import DEFAULT_HTTP_HOST, DEFAULT_TRANSPORT, Config
@@ -38,18 +38,18 @@ _T = TypeVar("_T")
 
 
 def _wrap(fn: Callable[..., _T], /, *args: Any, **kwargs: Any) -> _T:
-    """Call ``fn(*args, **kwargs)`` and convert any domain error to ``McpError``.
+    """Call ``fn(*args, **kwargs)`` and convert any domain error to ``MCPError``.
 
     This is the single chokepoint where ``WikiMcpError`` subclasses
     (``AuthError``, ``PageNotFound``, ``FetchError``, ``ConfigError``) and raw
-    ``mwclient.APIError`` are mapped to structured ``McpError`` with a
+    ``mwclient.APIError`` are mapped to structured ``MCPError`` with a
     distinct, documented code before reaching the MCP transport layer.
-    ``McpError`` instances (including cursor ``INVALID_PARAMS``) pass through
+    ``MCPError`` instances (including cursor ``INVALID_PARAMS``) pass through
     unchanged.
     """
     try:
         return fn(*args, **kwargs)
-    except McpError:
+    except MCPError:
         raise
     except WikiMcpError as exc:
         raise to_mcp_error(exc) from exc
@@ -90,7 +90,7 @@ def get_context() -> ServerContext:
 
 
 @asynccontextmanager
-async def _lifespan(_server: FastMCP) -> AsyncIterator[dict]:
+async def _lifespan(_server: MCPServer) -> AsyncIterator[dict]:
     # Build and authenticate up front so misconfiguration fails fast at startup.
     ctx = get_context()
     ctx.login()
@@ -109,7 +109,7 @@ async def _lifespan(_server: FastMCP) -> AsyncIterator[dict]:
                 _shutting_down = False
 
 
-mcp = FastMCP(
+mcp = MCPServer(
     "wg21-wiki",
     instructions=(
         "Read-only access to the WG21 (ISO C++) committee wiki as a verifiable "
@@ -250,9 +250,10 @@ def main() -> None:
                 cfg.http_host,
                 DEFAULT_HTTP_HOST,
             )
-        mcp.settings.host = cfg.http_host
-        mcp.settings.port = cfg.http_port
-        mcp.run(transport=cfg.transport)
+        if cfg.transport == "sse":
+            mcp.run(transport="sse", host=cfg.http_host, port=cfg.http_port)
+        else:
+            mcp.run(transport="streamable-http", host=cfg.http_host, port=cfg.http_port)
     except BaseException:
         _drop_primed_context()
         raise

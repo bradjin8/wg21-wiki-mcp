@@ -8,7 +8,7 @@ could go next.
 ## Component map
 
 ```
-server.py        FastMCP server; registers tools; lifespan logs in.
+server.py        MCPServer; registers tools; lifespan logs in.
   tools.py       Tool logic (structured outputs). All page content via the fetcher.
     context.py   ServerContext: wires config + client + calendar + cache + fetcher.
       fetch.py       PageFetcher: cache-first, batched, single-flight retrieval.
@@ -136,7 +136,7 @@ Under sustained lag (`maxlag` / slow responses), per-call timeouts surface as `F
 
 ## Error contract
 
-Every domain error is converted to a structured `McpError` / `ErrorData` with a
+Every domain error is converted to a structured `MCPError` / `ErrorData` with a
 distinct code **before** it crosses the tool boundary. The single mapping
 function lives in `errors.py`; `server._wrap()` calls it around every tool
 invocation.
@@ -153,7 +153,7 @@ invocation.
 - Auth-error messages are fixed strings; they never reflect the underlying
   login-exception text, which could carry credential-adjacent information.
 - All messages are actionable and contain no wiki page content.
-- `McpError` instances (including `INVALID_PARAMS`) pass through `_wrap` unchanged.
+- `MCPError` instances (including `INVALID_PARAMS`) pass through `_wrap` unchanged.
 
 ## Dependencies
 

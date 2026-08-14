@@ -149,27 +149,26 @@ def test_lifespan_runs(monkeypatch, tmp_path):
 
 
 def test_wrap_passthrough_mcp_error():
-    from mcp.shared.exceptions import McpError
-    from mcp.types import ErrorData
+    from mcp.shared.exceptions import MCPError
 
     from wg21_wiki_mcp.server import _wrap
 
     def _raise_mcp() -> None:
-        raise McpError(ErrorData(code=-32602, message="bad params"))
+        raise MCPError(-32602, "bad params")
 
-    with pytest.raises(McpError):
+    with pytest.raises(MCPError):
         _wrap(_raise_mcp)
 
 
 def test_wrap_converts_unexpected_exception():
-    from mcp.shared.exceptions import McpError
+    from mcp.shared.exceptions import MCPError
 
     from wg21_wiki_mcp.server import _wrap
 
     def _boom() -> None:
         raise ValueError("unexpected")
 
-    with pytest.raises(McpError):
+    with pytest.raises(MCPError):
         _wrap(_boom)
 
 
@@ -178,9 +177,9 @@ def test_main_runs_mcp_stdio_default(monkeypatch):
     monkeypatch.setenv("WIKI_BOT_PASSWORD", "secret")
     captured: dict[str, object] = {}
 
-    def _run(transport: str = "stdio", mount_path: str | None = None) -> None:
+    def _run(transport: str = "stdio", **kwargs: object) -> None:
         captured["transport"] = transport
-        captured["mount_path"] = mount_path
+        captured["kwargs"] = kwargs
 
     monkeypatch.setattr(server.mcp, "run", _run)
     try:
@@ -200,20 +199,16 @@ def test_main_selects_sse_transport(monkeypatch):
     monkeypatch.setenv("WG21_HTTP_PORT", "8765")
     captured: dict[str, object] = {}
 
-    def _run(transport: str = "stdio", mount_path: str | None = None) -> None:
+    def _run(transport: str = "stdio", **kwargs: object) -> None:
         captured["transport"] = transport
-        captured["mount_path"] = mount_path
+        captured["kwargs"] = kwargs
 
     monkeypatch.setattr(server.mcp, "run", _run)
-    original_host = server.mcp.settings.host
-    original_port = server.mcp.settings.port
     try:
         server.main()
         assert captured["transport"] == "sse"
-        assert server.mcp.settings.port == 8765
+        assert captured["kwargs"]["port"] == 8765
     finally:
-        server.mcp.settings.host = original_host
-        server.mcp.settings.port = original_port
         with server._state_lock:
             ctx = server._state.pop("ctx", None)
         if ctx is not None:

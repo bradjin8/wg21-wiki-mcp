@@ -12,17 +12,17 @@ limiting) is tracked in the follow-up issue draft below.
 
 ## What the MCP Python SDK provides
 
-The project pins `mcp>=1.27,<2` (`pyproject.toml`). `FastMCP.run()` accepts:
+The project pins `mcp>=2,<3` (`pyproject.toml`). `MCPServer.run()` accepts:
 
 | Transport | SDK support | Default bind | Endpoints (defaults) |
 |-----------|-------------|--------------|----------------------|
 | `stdio` | `run_stdio_async()` | n/a (stdin/stdout) | n/a |
-| `sse` | `run_sse_async(mount_path?)` via **uvicorn** + Starlette | `127.0.0.1:8000` | SSE: `/sse`, messages: `/messages/` |
+| `sse` | `run_sse_async()` via **uvicorn** + Starlette | `127.0.0.1:8000` | SSE: `/sse`, messages: `/messages/` |
 | `streamable-http` | `run_streamable_http_async()` via uvicorn | `127.0.0.1:8000` | `/mcp` |
 
 Both HTTP modes use **uvicorn** (a transitive dependency of `mcp`) and Starlette
-routing. The SDK exposes host/port on `FastMCP.settings` (`host`, `port`,
-`sse_path`, `message_path`, `streamable_http_path`).
+routing. Host, port, and path overrides are passed to `MCPServer.run()` or
+`run_sse_async()` / `streamable_http_app()` (not via a shared `settings` object).
 
 **Streamable HTTP** is the newer MCP transport (replacing the older SSE split
 endpoint pattern in many clients). It is available in our pinned SDK version and
@@ -52,8 +52,8 @@ WG21_HTTP_HOST=127.0.0.1 WG21_HTTP_PORT=9000 WG21_TRANSPORT=sse wg21-wiki-mcp
 
 `Config.transport`, `Config.http_host`, and `Config.http_port` are read from
 `WG21_TRANSPORT`, `WG21_HTTP_HOST`, and `WG21_HTTP_PORT` in `config.py`.
-`server.main()` applies HTTP settings to `mcp.settings` before calling
-`mcp.run(transport=...)`.
+`server.main()` passes HTTP bind settings as keyword arguments to
+`mcp.run(transport=..., host=..., port=...)`.
 
 Offline tests in `tests/test_transport_sse.py` start an SSE listener with a
 fake `ServerContext` and call `wiki_status` and `search_wiki` through the MCP
@@ -91,7 +91,7 @@ multi-agent local use (shared `~/.isocpp.wiki` cache directory).
   same env-configured bot/user credentials. Multi-tenant remote hosting would
   require per-session auth and context, not this singleton.
 
-The `_lifespan` manager runs at **process** start/stop (FastMCP invokes it when
+The `_lifespan` manager runs at **process** start/stop (MCPServer invokes it when
 the HTTP server boots), not per SSE connection — so we do not re-login on every
 HTTP connect. That matches stdio behavior and avoids login storms.
 

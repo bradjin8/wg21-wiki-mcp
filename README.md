@@ -113,7 +113,7 @@ print(page.content)  # sanitized wikitext (legacy EDG links rewritten)
 
 ## Error contract
 
-Every tool error surfaces as a structured `McpError` with a distinct code.
+Every tool error surfaces as a structured `MCPError` with a distinct code.
 Messages contain no credentials or wiki page content. Full code table and
 invariants: [ARCHITECTURE.md#error-contract](ARCHITECTURE.md#error-contract).
 

@@ -35,6 +35,11 @@ for the pre-1.0 API stability policy and deprecation timeline.
 - Legacy-URL existence checks now run through the shared `PageFetcher` (cache-first,
   single-flight) instead of a direct client fetch, and the probe budget, deadline, and
   `refresh` flag are threaded per tool response rather than per sanitized field.
+- Migrate to MCP Python SDK v2 (`mcp>=2,<3`): `MCPServer` replaces `FastMCP`,
+  `MCPError` replaces `McpError`, and HTTP transport bind settings are passed to
+  `run()` instead of `mcp.settings`. Lockfile regenerated for v2 transitive deps
+  (`mcp-types`, `httpx2`, etc.). Closes
+  [#99](https://github.com/cppalliance/wg21-wiki-mcp/issues/99).
 
 ## [0.3.1] - 2026-07-31
 

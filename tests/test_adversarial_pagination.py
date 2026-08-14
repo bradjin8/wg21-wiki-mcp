@@ -8,7 +8,7 @@ import json
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from mcp.shared.exceptions import McpError
+from mcp.shared.exceptions import MCPError
 from mcp.types import INVALID_PARAMS
 
 from wg21_wiki_mcp.pagination import chunk_utf8, decode_cursor, encode_cursor
@@ -91,7 +91,7 @@ def test_cursor_roundtrip_property(payload: dict) -> None:
 def test_malformed_cursor_raises_invalid_params(garbage: bytes) -> None:
     """Random bytes that are not valid dict JSON must raise INVALID_PARAMS."""
     token = base64.urlsafe_b64encode(garbage).decode("ascii")
-    with pytest.raises(McpError) as exc_info:
+    with pytest.raises(MCPError) as exc_info:
         decode_cursor(token)
     assert exc_info.value.error.code == INVALID_PARAMS
 
@@ -108,14 +108,14 @@ def test_malformed_cursor_raises_invalid_params(garbage: bytes) -> None:
 )
 def test_adversarial_cursors_raise_invalid_params(cursor: str) -> None:
     """Malformed, truncated, and oversized cursors raise INVALID_PARAMS, never crash."""
-    with pytest.raises(McpError) as exc:
+    with pytest.raises(MCPError) as exc:
         decode_cursor(cursor)
     assert exc.value.error.code == INVALID_PARAMS
 
 
 def test_oversized_cursor_token_raises() -> None:
     """Very large opaque tokens are rejected without crashing."""
-    with pytest.raises(McpError) as exc:
+    with pytest.raises(MCPError) as exc:
         decode_cursor("A" * 10_000)
     assert exc.value.error.code == INVALID_PARAMS
 

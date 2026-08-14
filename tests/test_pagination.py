@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from mcp.shared.exceptions import McpError
+from mcp.shared.exceptions import MCPError
 
 from wg21_wiki_mcp.pagination import chunk_utf8, cursor_offset, decode_cursor, encode_cursor
 
@@ -18,7 +18,7 @@ def test_decode_none_is_empty():
 
 
 def test_invalid_cursor_raises_invalid_params():
-    with pytest.raises(McpError) as exc:
+    with pytest.raises(MCPError) as exc:
         decode_cursor("!!!not-base64!!!")
     assert exc.value.error.code == -32602
 
@@ -28,7 +28,7 @@ def test_non_dict_cursor_rejected():
     import json
 
     bad = base64.urlsafe_b64encode(json.dumps([1, 2]).encode()).decode()
-    with pytest.raises(McpError):
+    with pytest.raises(MCPError):
         decode_cursor(bad)
 
 
@@ -43,7 +43,7 @@ def test_cursor_offset_roundtrip():
 
 @pytest.mark.parametrize("default", [-1, True])
 def test_cursor_offset_rejects_invalid_default(default):
-    with pytest.raises(McpError) as exc:
+    with pytest.raises(MCPError) as exc:
         cursor_offset(None, default=default)
     assert exc.value.error.code == -32602
 
@@ -58,7 +58,7 @@ def test_cursor_offset_rejects_invalid_default(default):
     ],
 )
 def test_cursor_offset_rejects_invalid_values(payload):
-    with pytest.raises(McpError) as exc:
+    with pytest.raises(MCPError) as exc:
         cursor_offset(encode_cursor(payload))
     assert exc.value.error.code == -32602
 
