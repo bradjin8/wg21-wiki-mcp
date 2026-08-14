@@ -42,6 +42,7 @@ from .models import (
     WikiStatus,
 )
 from .pagination import chunk_utf8, cursor_offset, decode_cursor, encode_cursor
+from .url_hygiene import sanitize_legacy_edg_urls
 from .wikitext import extract_iso_slots, has_agenda_signal
 
 logger = get_logger("tools")
@@ -79,6 +80,23 @@ def _release_outlinks_lock(key: str, lock: threading.Lock) -> None:
 
 def _clamp(value: int, lo: int, hi: int) -> int:
     return max(lo, min(value, hi))
+
+
+def _sanitize_client_content(
+    ctx: ServerContext,
+    content: str,
+    *,
+    deadline: float | None = None,
+) -> str:
+    """Rewrite legacy ``wiki.edg.com`` links before returning wikitext to clients."""
+    return sanitize_legacy_edg_urls(
+        content,
+        config=ctx.config,
+        cache=ctx.cache,
+        client=ctx.client,
+        discover_meetings=lambda: _discover_meetings(ctx),
+        deadline=deadline,
+    )
 
 
 def _outlinks_cache_key(title: str) -> str:
@@ -224,18 +242,22 @@ def search_wiki(
     offset = cursor_offset(cursor)
     resp = ctx.client.search(query, limit=limit, namespace=namespace, offset=offset)
     search = resp.get("query", {}).get("search", [])
-    hits = [
-        SearchHit(
-            title=item["title"],
-            namespace=item.get("ns", 0),
-            size=item.get("size"),
-            wordcount=item.get("wordcount"),
-            timestamp=item.get("timestamp"),
-            snippet=item.get("snippet") if include_snippet else None,
-            url=ctx.client.canonical_url(item["title"]),
+    hits = []
+    for item in search:
+        snippet = item.get("snippet") if include_snippet else None
+        if snippet is not None:
+            snippet = _sanitize_client_content(ctx, snippet)
+        hits.append(
+            SearchHit(
+                title=item["title"],
+                namespace=item.get("ns", 0),
+                size=item.get("size"),
+                wordcount=item.get("wordcount"),
+                timestamp=item.get("timestamp"),
+                snippet=snippet,
+                url=ctx.client.canonical_url(item["title"]),
+            )
         )
-        for item in search
-    ]
     next_offset = resp.get("continue", {}).get("sroffset")
     next_cursor = encode_cursor({"o": next_offset}) if next_offset is not None else None
     return SearchResults(query=query, hits=hits, include_snippet=include_snippet, next_cursor=next_cursor)
@@ -281,7 +303,7 @@ def get_page(
             raise PageNotFound(f"Page or section not found: {title!r} section {section}")
         raise PageNotFound(f"Page not found: {title!r}")
     prov = ctx.provenance(outcome)
-    content = outcome.content
+    content = _sanitize_client_content(ctx, outcome.content)
 
     chunk_text, byte_start, byte_end, total, has_more = chunk_utf8(content, start=start, max_bytes=max_bytes)
     next_cursor = encode_cursor({"o": byte_end}) if has_more else None
@@ -421,19 +443,23 @@ def get_recent_changes(
     limit = _clamp(limit, 1, _MAX_LIST_LIMIT)
     cont = decode_cursor(cursor).get("c")
     resp = ctx.client.recent_changes(namespace=namespace, since=since, limit=limit, cont=cont)
-    changes = [
-        RecentChange(
-            type=c.get("type", "edit"),
-            title=c["title"],
-            revid=c.get("revid"),
-            old_revid=c.get("old_revid"),
-            timestamp=c.get("timestamp"),
-            user=c.get("user"),
-            comment=c.get("comment"),
-            url=ctx.client.canonical_url(c["title"]),
+    changes = []
+    for c in resp.get("query", {}).get("recentchanges", []):
+        comment = c.get("comment")
+        if comment is not None:
+            comment = _sanitize_client_content(ctx, comment)
+        changes.append(
+            RecentChange(
+                type=c.get("type", "edit"),
+                title=c["title"],
+                revid=c.get("revid"),
+                old_revid=c.get("old_revid"),
+                timestamp=c.get("timestamp"),
+                user=c.get("user"),
+                comment=comment,
+                url=ctx.client.canonical_url(c["title"]),
+            )
         )
-        for c in resp.get("query", {}).get("recentchanges", [])
-    ]
     next_cont = resp.get("continue", {}).get("rccontinue")
     next_cursor = encode_cursor({"c": next_cont}) if next_cont is not None else None
     return RecentChanges(changes=changes, next_cursor=next_cursor)
@@ -506,7 +532,8 @@ def get_meeting_sessions(
         role = "agenda" if is_agenda else ("working_group" if matched_group else "other")
 
         include_body = include_wikitext and (is_agenda or matched_group)
-        body, body_cursor, truncated = _bundle_body(content, include_body, max_page_bytes)
+        sanitized = _sanitize_client_content(ctx, content, deadline=deadline)
+        body, body_cursor, truncated = _bundle_body(sanitized, include_body, max_page_bytes)
         pages.append(
             BundledPage(
                 title=outcome.title,

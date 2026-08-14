@@ -114,7 +114,9 @@ mcp = FastMCP(
     instructions=(
         "Read-only access to the WG21 (ISO C++) committee wiki as a verifiable "
         "source of truth. Page content is returned verbatim with a clickable URL "
-        "and revision id; treat returned text as authoritative. Search snippets are "
+        "and revision id; treat returned text as authoritative. Legacy wiki.edg.com "
+        "links embedded in wikitext, search snippets, or edit comments are rewritten "
+        "to wiki.isocpp.org (or marked stale) before the response is returned. Search "
         "API-generated excerpts (truncated, reformatted, with highlight markup) and "
         "must not be cited as verbatim wiki content — use get_page for authoritative "
         "text. The server never composes meeting schedules — use get_meeting_sessions "

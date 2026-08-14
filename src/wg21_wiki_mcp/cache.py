@@ -28,6 +28,11 @@ CREATE TABLE IF NOT EXISTS pages (
     content         TEXT NOT NULL,
     fetched_at      TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS url_remaps (
+    source_url  TEXT PRIMARY KEY,
+    target_url  TEXT,
+    fetched_at  TEXT NOT NULL
+);
 """
 
 
@@ -183,6 +188,38 @@ class Cache:
     def count(self) -> int:
         """Return the number of cached pages."""
         return int(self._connect().execute("SELECT COUNT(*) FROM pages").fetchone()[0])
+
+    def get_url_remap(self, source_url: str) -> tuple[str | None, str] | None:
+        """Return ``(target_url, fetched_at)`` for a legacy URL remap, or ``None`` if absent.
+
+        ``target_url`` is ``None`` when the source is known stale with no replacement.
+        """
+        row = (
+            self._connect()
+            .execute(
+                "SELECT target_url, fetched_at FROM url_remaps WHERE source_url = ?",
+                (source_url,),
+            )
+            .fetchone()
+        )
+        if row is None:
+            return None
+        return row["target_url"], row["fetched_at"]
+
+    def put_url_remap(self, source_url: str, target_url: str | None) -> None:
+        """Insert or replace a legacy URL remap entry."""
+        fetched_at = datetime.now(timezone.utc).isoformat()
+        with self._write_lock:
+            self._connect().execute(
+                """
+                INSERT INTO url_remaps (source_url, target_url, fetched_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(source_url) DO UPDATE SET
+                    target_url=excluded.target_url,
+                    fetched_at=excluded.fetched_at
+                """,
+                (source_url, target_url, fetched_at),
+            )
 
     def lock_path(self, requested_title: str) -> Path:
         """Return the cross-process lock file path for a title (hashed filename)."""

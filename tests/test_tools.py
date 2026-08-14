@@ -70,6 +70,19 @@ def test_search_include_snippet_returns_api_excerpt(fake_client, make_ctx):
     assert res.include_snippet is True
 
 
+def test_search_snippet_rewrites_legacy_edg_urls(fake_client, make_ctx):
+    edg = "https://wiki.edg.com/bin/view/Wg21kona2025/US207"
+    fake_client.search_results = [
+        {"title": "Topic A", "ns": 0, "snippet": f"see {edg}"},
+    ]
+    fake_client.pages["2025-11_Kona:US207"] = FakePage("minutes", 1)
+    fake_client.allpages = [{"title": "2025-11 Kona", "ns": 0}]
+    ctx = make_ctx(fake_client)
+    res = tools.search_wiki(ctx, "topic", limit=5, include_snippet=True)
+    assert edg not in res.hits[0].snippet
+    assert "2025-11_Kona:US207" in res.hits[0].snippet
+
+
 def test_search_pagination_cursor(fake_client, make_ctx):
     fake_client.search_results = [{"title": f"T{i}", "ns": 0} for i in range(7)]
     ctx = make_ctx(fake_client)
@@ -89,6 +102,17 @@ def test_get_page_verbatim_and_provenance(fake_client, make_ctx):
     assert page.provenance.url.endswith("title=My_Page")
     assert page.provenance.oldid_url.endswith("oldid=42")
     assert page.chunk.has_more is False
+
+
+def test_get_page_rewrites_legacy_edg_urls(fake_client, make_ctx):
+    edg = "https://wiki.edg.com/bin/view/Wg21kona2025/US207"
+    fake_client.pages["LEWG"] = FakePage(f"see {edg}", 1)
+    fake_client.pages["2025-11_Kona:US207"] = FakePage("minutes", 2)
+    fake_client.allpages = [{"title": "2025-11 Kona", "ns": 0}]
+    ctx = make_ctx(fake_client)
+    page = tools.get_page(ctx, "LEWG")
+    assert edg not in page.content
+    assert "2025-11_Kona:US207" in page.content
 
 
 def test_get_page_fidelity_across_chunks(fake_client, make_ctx):
@@ -246,6 +270,24 @@ def test_recent_changes(fake_client, make_ctx):
     ctx = make_ctx(fake_client)
     res = tools.get_recent_changes(ctx, limit=10)
     assert res.changes[0].title == "P1" and res.changes[0].url.endswith("title=P1")
+
+
+def test_recent_changes_comment_rewrites_legacy_edg_urls(fake_client, make_ctx):
+    edg = "https://wiki.edg.com/bin/view/Wg21kona2025/US207"
+    fake_client.recent = [
+        {
+            "type": "edit",
+            "title": "P1",
+            "revid": 2,
+            "comment": f"link {edg}",
+        },
+    ]
+    fake_client.pages["2025-11_Kona:US207"] = FakePage("minutes", 1)
+    fake_client.allpages = [{"title": "2025-11 Kona", "ns": 0}]
+    ctx = make_ctx(fake_client)
+    res = tools.get_recent_changes(ctx, limit=10)
+    assert edg not in res.changes[0].comment
+    assert "2025-11_Kona:US207" in res.changes[0].comment
 
 
 # --- meeting overview -----------------------------------------------------

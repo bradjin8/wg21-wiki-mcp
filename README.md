@@ -69,7 +69,11 @@ Minimal Cursor / `uvx` example:
 ```
 
 See [.env.example](.env.example) for optional tuning (cache directory, TTLs,
-meeting overrides).
+meeting overrides, legacy URL rewrite timeouts).
+
+Returned page text is verbatim wiki content except that discontinued
+``wiki.edg.com`` links are rewritten to ``wiki.isocpp.org`` (or marked stale)
+in page bodies, optional search snippets, and recent-change comments.
 
 ## Tools
 

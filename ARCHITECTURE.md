@@ -23,6 +23,7 @@ server.py        FastMCP server; registers tools; lifespan logs in.
   errors.py      Error hierarchy, documented codes, and to_mcp_error() mapping.
   pagination.py  Opaque cursors + UTF-8-safe chunking.
   wikitext.py    Deterministic agenda time-slot extraction (the only content parse).
+  url_hygiene.py Legacy wiki.edg.com URL rewrite/annotation at the tool boundary.
   config.py      Environment-driven configuration; re-exports ConfigError from errors.py.
   deprecation.py warn_deprecated() helper for future API removals.
 ```
@@ -49,8 +50,10 @@ session), transparently re-logs-in via the pinned path.
 
 ## Correctness: source of truth
 
-- Page content is returned **byte-for-byte**; nothing in the path
-  (fetch -> cache -> tool) transforms it.
+- Page content is returned **byte-for-byte** from the wiki through fetch and
+  cache; at the tool boundary legacy ``wiki.edg.com`` links in page text,
+  search snippets (when opted in), and recent-change comments are rewritten to
+  ``wiki.isocpp.org`` (or marked stale) before the MCP response.
 - Every result carries verifiable provenance; redirects and title normalization
   are surfaced so content is never misattributed.
 - Long pages are chunked only on UTF-8 boundaries; partiality is always signaled

@@ -30,6 +30,8 @@ __all__ = [
     "DEFAULT_SAML_TIMEOUT_S",
     "DEFAULT_TTL_MEETING_S",
     "DEFAULT_TTL_NORMAL_S",
+    "DEFAULT_URL_HYGIENE_TIMEOUT_S",
+    "DEFAULT_URL_REMAP_TTL_S",
     "DEFAULT_TRANSPORT",
     "VALID_TRANSPORTS",
     "WIKI_BASE_URL",
@@ -54,6 +56,8 @@ DEFAULT_TTL_NORMAL_S = 7 * 24 * 60 * 60  # one week
 DEFAULT_TTL_MEETING_S = 60 * 60  # one hour
 DEFAULT_CACHE_DIR_NAME = ".isocpp.wiki"
 DEFAULT_SAML_TIMEOUT_S = 30
+DEFAULT_URL_HYGIENE_TIMEOUT_S = 12
+DEFAULT_URL_REMAP_TTL_S = 7 * 24 * 60 * 60  # one week
 TransportName = Literal["stdio", "sse", "streamable-http"]
 DEFAULT_TRANSPORT: TransportName = "stdio"
 DEFAULT_HTTP_HOST = "127.0.0.1"
@@ -132,6 +136,8 @@ class Config:
     saml_username_field: str | None = None
     saml_password_field: str | None = None
     saml_timeout_s: int = DEFAULT_SAML_TIMEOUT_S
+    url_hygiene_timeout_s: int = DEFAULT_URL_HYGIENE_TIMEOUT_S
+    url_remap_ttl_s: int = DEFAULT_URL_REMAP_TTL_S
     transport: TransportName = DEFAULT_TRANSPORT
     http_host: str = DEFAULT_HTTP_HOST
     http_port: int = DEFAULT_HTTP_PORT
@@ -180,6 +186,8 @@ class Config:
             saml_username_field=saml_user_field,
             saml_password_field=saml_pass_field,
             saml_timeout_s=_env_int("WIKI_SAML_TIMEOUT_S", DEFAULT_SAML_TIMEOUT_S),
+            url_hygiene_timeout_s=_env_int("ISOCPP_WIKI_URL_HYGIENE_TIMEOUT_S", DEFAULT_URL_HYGIENE_TIMEOUT_S),
+            url_remap_ttl_s=_env_int("ISOCPP_WIKI_URL_REMAP_TTL", DEFAULT_URL_REMAP_TTL_S),
             transport=_parse_transport(_env_first("WG21_TRANSPORT")),
             http_host=_env_first("WG21_HTTP_HOST") or DEFAULT_HTTP_HOST,
             http_port=_env_port("WG21_HTTP_PORT", DEFAULT_HTTP_PORT),
