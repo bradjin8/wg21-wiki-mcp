@@ -50,14 +50,16 @@ session), transparently re-logs-in via the pinned path.
 
 ## Correctness: source of truth
 
-- Page content is returned **byte-for-byte** from the wiki through fetch and
-  cache; at the tool boundary legacy ``wiki.edg.com`` links in page text,
-  search snippets (when opted in), and recent-change comments are rewritten to
-  ``wiki.isocpp.org`` (or marked stale) before the MCP response.
+- Page content is fetched **byte-for-byte** from the wiki through fetch and
+  cache; at the tool boundary legacy ``wiki.edg.com`` links in ``get_page``
+  bodies, bundled meeting-session wikitext (when ``include_wikitext`` includes a
+  page body), search snippets (when opted in), and recent-change comments are
+  rewritten to ``wiki.isocpp.org`` (or marked stale) before the MCP response.
 - Every result carries verifiable provenance; redirects and title normalization
   are surfaced so content is never misattributed.
 - Long pages are chunked only on UTF-8 boundaries; partiality is always signaled
-  (`has_more`/`next_cursor`), and reassembling chunks reproduces the page exactly.
+  (`has_more`/`next_cursor`), and reassembling chunks reproduces the **sanitized**
+  tool output (not the raw cached wikitext when URL hygiene applies).
 - Missing pages, fetch failures, and auth failures are distinct, explicit
   outcomes; nothing is fabricated, and `refresh=True` forces a live re-fetch.
 

@@ -73,7 +73,8 @@ meeting overrides, legacy URL rewrite timeouts).
 
 Returned page text is verbatim wiki content except that discontinued
 ``wiki.edg.com`` links are rewritten to ``wiki.isocpp.org`` (or marked stale)
-in page bodies, optional search snippets, and recent-change comments.
+in page bodies, bundled meeting-session wikitext (when a body is included),
+optional search snippets, and recent-change comments.
 
 ## Tools
 
@@ -94,7 +95,7 @@ ctx = ServerContext.create(Config.from_env())
 hits = tools.search_wiki(ctx, "some topic", limit=5)
 page = tools.get_page(ctx, hits.hits[0].title)
 print(page.provenance.url, page.provenance.revid)
-print(page.content)  # exact wikitext
+print(page.content)  # sanitized wikitext (legacy EDG links rewritten)
 ```
 
 ## Error contract

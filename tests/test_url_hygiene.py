@@ -10,6 +10,7 @@ from conftest import FakePage, FakeWikiClient, make_config
 
 from wg21_wiki_mcp.cache import Cache
 from wg21_wiki_mcp.url_hygiene import (
+    _MAX_EDG_PROBES_PER_PAGE,
     _apply_replacements,
     _probe_edg_stub,
     _remap_fresh,
@@ -125,6 +126,25 @@ def test_probe_edg_stub_paths():
     with patch("wg21_wiki_mcp.url_hygiene.requests.get", return_value=NotStub()):
         assert _probe_edg_stub(EDG_US207, user_agent="test", timeout=1.0) is None
 
+    class Redirect:
+        status_code = 302
+        headers = {"Location": "https://wiki.isocpp.org/2025-11_Kona:US207"}
+
+    with patch(
+        "wg21_wiki_mcp.url_hygiene.requests.get",
+        side_effect=[Redirect(), Ok()],
+    ):
+        assert _probe_edg_stub(EDG_US207, user_agent="test", timeout=1.0) == (
+            "https://wiki.isocpp.org/2025-11_Kona:US207"
+        )
+
+    class UnsafeRedirect:
+        status_code = 302
+        headers = {"Location": "http://127.0.0.1/stub"}
+
+    with patch("wg21_wiki_mcp.url_hygiene.requests.get", return_value=UnsafeRedirect()):
+        assert _probe_edg_stub(EDG_US207, user_agent="test", timeout=1.0) is None
+
     with patch(
         "wg21_wiki_mcp.url_hygiene.requests.get",
         side_effect=requests.Timeout("slow"),
@@ -181,7 +201,7 @@ def test_sanitize_probe_cap_marks_excess_stale(tmp_path):
     urls = [f"https://wiki.edg.com/bin/view/Wg21unk{i}2025/P{i}" for i in range(12)]
     body = " ".join(urls)
     with Cache(config.cache_dir) as cache:
-        with patch("wg21_wiki_mcp.url_hygiene._probe_edg_stub", return_value=None):
+        with patch("wg21_wiki_mcp.url_hygiene._probe_edg_stub", return_value=None) as mock_probe:
             out = sanitize_legacy_edg_urls(
                 body,
                 config=config,
@@ -189,6 +209,7 @@ def test_sanitize_probe_cap_marks_excess_stale(tmp_path):
                 client=client,
                 discover_meetings=lambda: [],
             )
+    assert mock_probe.call_count == _MAX_EDG_PROBES_PER_PAGE
     assert out.count("[stale URL:") == 12
 
 
@@ -205,9 +226,10 @@ def test_sanitize_stub_url_when_title_not_on_wiki(tmp_path):
                 client=client,
                 discover_meetings=lambda: [],
             )
-        assert stub_url in out
+        assert stub_url not in out
+        assert out.startswith("[stale URL: ")
         cached = cache.get_url_remap(EDG_US207)
-        assert cached is not None and cached[0] == stub_url
+        assert cached is not None and cached[0] is None
 
 
 def test_edg_url_to_wiki_title_unmapped():

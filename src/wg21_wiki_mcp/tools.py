@@ -532,7 +532,10 @@ def get_meeting_sessions(
         role = "agenda" if is_agenda else ("working_group" if matched_group else "other")
 
         include_body = include_wikitext and (is_agenda or matched_group)
-        sanitized = _sanitize_client_content(ctx, content, deadline=deadline)
+        if include_body:
+            sanitized = _sanitize_client_content(ctx, content, deadline=deadline)
+        else:
+            sanitized = content
         body, body_cursor, truncated = _bundle_body(sanitized, include_body, max_page_bytes)
         pages.append(
             BundledPage(

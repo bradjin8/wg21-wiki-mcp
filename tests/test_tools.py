@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from unittest.mock import patch
 
 import pytest
 from conftest import FakeCalendar, FakePage
@@ -350,6 +351,36 @@ def test_session_bundle(fake_client, make_ctx):
     assert rooms.role == "other"
     assert rooms.wikitext is None
     assert rooms.provenance.url.endswith("title=2026-06_Alpha:Rooms")
+
+
+def test_session_bundle_rewrites_legacy_edg_urls(fake_client, make_ctx):
+    edg = "https://wiki.edg.com/bin/view/Wg21kona2025/US207"
+    fake_client.pages["2026-06 Alpha"] = FakePage("home", 1)
+    fake_client.pages["2026-06 Alpha:EWG"] = FakePage(f"see {edg}", 2)
+    fake_client.pages["2025-11_Kona:US207"] = FakePage("minutes", 3)
+    fake_client.allpages = [
+        {"title": "2026-06 Alpha", "ns": 0},
+        {"title": "2025-11 Kona", "ns": 0},
+    ]
+    fake_client.links["2026-06 Alpha"] = [{"title": "2026-06 Alpha:EWG", "ns": 0}]
+    ctx = make_ctx(fake_client)
+    bundle = tools.get_meeting_sessions(ctx, groups=["EWG"])
+    ewg = next(p for p in bundle.pages if p.title == "2026-06 Alpha:EWG")
+    assert edg not in ewg.wikitext
+    assert "2025-11_Kona:US207" in ewg.wikitext
+
+
+def test_session_bundle_skips_sanitizer_when_wikitext_excluded(fake_client, make_ctx):
+    edg = "https://wiki.edg.com/bin/view/Wg21kona2025/US207"
+    fake_client.pages["2026-06 Alpha"] = FakePage("home", 1)
+    fake_client.pages["2026-06 Alpha:Agenda"] = FakePage(f"agenda {edg}", 2)
+    fake_client.allpages = [{"title": "2026-06 Alpha", "ns": 0}]
+    fake_client.links["2026-06 Alpha"] = [{"title": "2026-06 Alpha:Agenda", "ns": 0}]
+    ctx = make_ctx(fake_client)
+    with patch("wg21_wiki_mcp.tools._sanitize_client_content") as mock_sanitize:
+        bundle = tools.get_meeting_sessions(ctx, include_wikitext=False)
+        mock_sanitize.assert_not_called()
+    assert all(p.wikitext is None for p in bundle.pages)
 
 
 def test_session_bundle_manifest_only(fake_client, make_ctx):

@@ -7,11 +7,12 @@ rewrites or annotates only those legacy URLs at the tool boundary.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 import requests
 
@@ -148,28 +149,64 @@ def _remap_fresh(entry: tuple[str | None, str], ttl_seconds: int) -> bool:
     return age < ttl_seconds
 
 
+_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+_MAX_REDIRECT_HOPS = 10
+
+
+def _is_safe_redirect_target(url: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+    if host == "localhost" or host.endswith(".localhost"):
+        return False
+    try:
+        addr = ipaddress.ip_address(host)
+        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_multicast or addr.is_reserved:
+            return False
+    except ValueError:
+        pass
+    return True
+
+
 def _probe_edg_stub(
     url: str,
     *,
     user_agent: str,
     timeout: float,
 ) -> str | None:
-    try:
-        resp = requests.get(
-            url,
-            timeout=timeout,
-            headers={"User-Agent": user_agent},
-            allow_redirects=True,
-        )
-    except requests.RequestException as exc:
-        logger.debug("EDG probe failed for %s: %s", url, safe_exception_summary(exc))
-        return None
-    if resp.status_code >= 400:
-        return None
-    body = resp.text
-    if not is_edg_discontinued_html(body):
-        return None
-    return parse_isocpp_url_from_stub(body)
+    current_url = url
+    for _ in range(_MAX_REDIRECT_HOPS + 1):
+        try:
+            resp = requests.get(
+                current_url,
+                timeout=timeout,
+                headers={"User-Agent": user_agent},
+                allow_redirects=False,
+            )
+        except requests.RequestException as exc:
+            logger.debug("EDG probe failed for %s: %s", url, safe_exception_summary(exc))
+            return None
+        if resp.status_code in _REDIRECT_STATUSES:
+            location = resp.headers.get("Location")
+            if not location:
+                return None
+            next_url = urljoin(current_url, location)
+            if not _is_safe_redirect_target(next_url):
+                logger.debug("EDG probe blocked unsafe redirect to %s", next_url)
+                return None
+            current_url = next_url
+            continue
+        if resp.status_code >= 400:
+            return None
+        body = resp.text
+        if not is_edg_discontinued_html(body):
+            return None
+        return parse_isocpp_url_from_stub(body)
+    logger.debug("EDG probe exceeded redirect hops for %s", url)
+    return None
 
 
 def _titles_exist(
@@ -270,8 +307,8 @@ def sanitize_legacy_edg_urls(
                     replacements[source] = target
                     cache.put_url_remap(source, target)
                     continue
-            replacements[source] = stub_target
-            cache.put_url_remap(source, stub_target)
+            replacements[source] = f"{_STALE_PREFIX}{source}]"
+            cache.put_url_remap(source, None)
             continue
         replacements[source] = f"{_STALE_PREFIX}{source}]"
         cache.put_url_remap(source, None)
