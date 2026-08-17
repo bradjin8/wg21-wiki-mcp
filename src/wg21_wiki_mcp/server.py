@@ -160,7 +160,11 @@ def get_page(
     cursor: str | None = None,
     refresh: bool = False,
 ) -> PageContent:
-    """Return verbatim wikitext for a page (or one section), with provenance; chunked if large."""
+    """Return wikitext for a page (or one section), with provenance; chunked if large.
+
+    Legacy ``wiki.edg.com`` links in the returned body are rewritten to
+    ``wiki.isocpp.org`` (or marked stale) at the tool boundary.
+    """
     return _wrap(
         tools.get_page,
         get_context(),
@@ -192,7 +196,7 @@ def list_meetings(limit: int = 10, cursor: str | None = None) -> MeetingList:
 
 @mcp.tool()
 def get_meeting_overview(meeting: str | None = None) -> MeetingOverview:
-    """Return a meeting's landing page (verbatim) plus its subpage outlink index.
+    """Return a meeting's landing page plus its subpage outlink index.
 
     Defaults to the latest meeting.
     """
@@ -208,9 +212,10 @@ def get_meeting_sessions(
 ) -> SessionBundle:
     """Return raw materials to compose a meeting's schedule.
 
-    Deterministic agenda time slots plus relevant pages verbatim. The server does
-    not compose a schedule; the caller composes from the bundle. Defaults to the
-    latest meeting.
+    Deterministic agenda time slots plus relevant pages. The server does
+    not compose a schedule; the caller composes from the bundle. Bundled
+    wikitext may have legacy wiki.edg.com links rewritten at the tool boundary
+    when a page body is included. Defaults to the latest meeting.
     """
     return _wrap(
         tools.get_meeting_sessions,

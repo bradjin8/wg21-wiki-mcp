@@ -10,6 +10,13 @@ for the pre-1.0 API stability policy and deprecation timeline.
 
 ## [Unreleased]
 
+### Added
+
+- Tool-boundary rewrite or stale annotation of discontinued ``wiki.edg.com`` links in
+  MCP responses (``get_page`` bodies, optional search snippets, recent-change comments,
+  and bundled meeting-session wikitext when a body is included); fetch/cache wikitext
+  remains byte-for-byte ([#98](https://github.com/cppalliance/wg21-wiki-mcp/issues/98)).
+
 ### Changed
 
 - Extended the `mwclient` PyPI release-age hard-gate waiver to **2026-12-31** while

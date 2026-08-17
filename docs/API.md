@@ -14,13 +14,13 @@ Errors surface as `McpError` with application codes documented in
 
 ## `get_meeting_overview`
 
-Return a meeting's landing page (verbatim) plus its subpage outlink index.
+Return a meeting's landing page plus its subpage outlink index.
 
 | Parameter | Type | Default |
 | --- | --- | --- |
 | `meeting` | `str \| None` | `None` |
 
-**Returns:** `MeetingOverview` — A meeting's landing page (verbatim) plus a deterministic outlink index.
+**Returns:** `MeetingOverview` — A meeting's landing page plus a deterministic outlink index.
 
 ## `get_meeting_sessions`
 
@@ -37,7 +37,7 @@ Return raw materials to compose a meeting's schedule.
 
 ## `get_page`
 
-Return verbatim wikitext for a page (or one section), with provenance; chunked if large.
+Return wikitext for a page (or one section), with provenance; chunked if large.
 
 | Parameter | Type | Default |
 | --- | --- | --- |
@@ -47,7 +47,7 @@ Return verbatim wikitext for a page (or one section), with provenance; chunked i
 | `cursor` | `str \| None` | `None` |
 | `refresh` | `bool` | `False` |
 
-**Returns:** `PageContent` — Verbatim wikitext for a page (or a chunk of it) plus provenance.
+**Returns:** `PageContent` — Wikitext for a page (or a chunk of it) plus provenance.
 
 ## `get_recent_changes`
 
@@ -120,15 +120,15 @@ Operational status: auth path, meeting-aware TTL state, and cache stats (no wiki
 
 Structured tool outputs are Pydantic models in [models.py](../src/wg21_wiki_mcp/models.py). Public models:
 
-- **`BundledPage`** — One raw page in a session bundle (verbatim, with provenance).
+- **`BundledPage`** — One page in a session bundle (wikitext when included, with provenance).
 - **`CalendarStatus`** — Status of the public meeting-calendar parse used for cache TTL selection.
 - **`Chunk`** — Pagination state for chunked page content (UTF-8-boundary safe).
 - **`IsoSlot`** — A deterministically-extracted agenda time boundary (no interpretation).
 - **`MeetingList`** — A page of discovered meetings plus the currently active one, if any.
-- **`MeetingOverview`** — A meeting's landing page (verbatim) plus a deterministic outlink index.
+- **`MeetingOverview`** — A meeting's landing page plus a deterministic outlink index.
 - **`MeetingRef`** — A discovered meeting namespace, with public-calendar status if known.
 - **`NamespaceInfo`** — A MediaWiki content namespace: its numeric id and names.
-- **`PageContent`** — Verbatim wikitext for a page (or a chunk of it) plus provenance.
+- **`PageContent`** — Wikitext for a page (or a chunk of it) plus provenance.
 - **`PageList`** — A page of page references within a namespace, with a pagination cursor.
 - **`PageRef`** — A lightweight title + URL reference (no content).
 - **`Provenance`** — Identity and verifiable source links for a wiki page revision.
