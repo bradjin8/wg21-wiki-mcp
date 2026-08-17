@@ -275,15 +275,22 @@ def test_probe_edg_stub_stops_when_timeout_budget_is_spent():
 
 def test_probe_edg_stub_shares_one_timeout_budget_across_hops():
     seen: list[float] = []
+    clock = {"t": 1000.0}
+
+    def fake_monotonic() -> float:
+        return clock["t"]
 
     def fake_get(_url, **kwargs):
         seen.append(kwargs["timeout"])
+        clock["t"] += 1.0
         return _redirect_to(f"https://wiki.isocpp.org/hop{len(seen)}")()
 
-    with patch("wg21_wiki_mcp.url_hygiene.requests.get", side_effect=fake_get):
+    with (
+        patch("wg21_wiki_mcp.url_hygiene.time.monotonic", side_effect=fake_monotonic),
+        patch("wg21_wiki_mcp.url_hygiene.requests.get", side_effect=fake_get),
+    ):
         _probe_edg_stub(EDG_US207, user_agent="test", timeout=5.0)
-    assert seen[0] <= 5.0
-    assert seen[-1] < seen[0]
+    assert seen[:3] == [5.0, 4.0, 3.0]
 
 
 def test_titles_exist_empty(tmp_path):
