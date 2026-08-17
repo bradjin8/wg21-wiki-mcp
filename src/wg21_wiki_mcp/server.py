@@ -113,14 +113,15 @@ mcp = FastMCP(
     "wg21-wiki",
     instructions=(
         "Read-only access to the WG21 (ISO C++) committee wiki as a verifiable "
-        "source of truth. Page content is returned verbatim with a clickable URL "
-        "and revision id; treat returned text as authoritative. Legacy wiki.edg.com "
-        "links embedded in wikitext, search snippets, or edit comments are rewritten "
-        "to wiki.isocpp.org (or marked stale) before the response is returned. Search "
-        "API-generated excerpts (truncated, reformatted, with highlight markup) and "
-        "must not be cited as verbatim wiki content — use get_page for authoritative "
-        "text. The server never composes meeting schedules — use get_meeting_sessions "
-        "to get the raw materials and compose them yourself."
+        "source of truth. Page content is returned as stored on the wiki, with a "
+        "clickable URL and revision id, except that legacy wiki.edg.com links "
+        "embedded in wikitext, search snippets, or edit comments are rewritten to "
+        "wiki.isocpp.org (or annotated with the literal marker '(stale URL)') "
+        "before the response is returned. Search snippets are API-generated "
+        "excerpts (truncated, reformatted, with highlight markup) and must not be "
+        "cited as verbatim wiki content — use get_page for authoritative text. The "
+        "server never composes meeting schedules — use get_meeting_sessions to get "
+        "the raw materials and compose them yourself."
     ),
     lifespan=_lifespan,
 )
@@ -163,7 +164,8 @@ def get_page(
     """Return wikitext for a page (or one section), with provenance; chunked if large.
 
     Legacy ``wiki.edg.com`` links in the returned body are rewritten to
-    ``wiki.isocpp.org`` (or marked stale) at the tool boundary.
+    ``wiki.isocpp.org`` at the tool boundary; an unresolvable link keeps its URL
+    followed by the literal marker ``(stale URL)``.
     """
     return _wrap(
         tools.get_page,
@@ -215,7 +217,8 @@ def get_meeting_sessions(
     Deterministic agenda time slots plus relevant pages. The server does
     not compose a schedule; the caller composes from the bundle. Bundled
     wikitext may have legacy wiki.edg.com links rewritten at the tool boundary
-    when a page body is included. Defaults to the latest meeting.
+    when a page body is included, or annotated with the literal marker
+    ``(stale URL)`` when unresolvable. Defaults to the latest meeting.
     """
     return _wrap(
         tools.get_meeting_sessions,

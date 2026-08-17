@@ -2,8 +2,10 @@
 
 Each function takes a :class:`~wg21_wiki_mcp.context.ServerContext` and returns
 a structured Pydantic model. All page content flows through the centralized
-``PageFetcher``; nothing here transforms wiki text. List tools paginate with
-opaque cursors; ``get_page`` chunks long pages on UTF-8 boundaries.
+``PageFetcher``; the only transform applied before a response leaves the server
+is legacy ``wiki.edg.com`` URL hygiene (see :mod:`wg21_wiki_mcp.url_hygiene`).
+List tools paginate with opaque cursors; ``get_page`` chunks long pages on UTF-8
+boundaries.
 """
 
 from __future__ import annotations
@@ -42,7 +44,7 @@ from .models import (
     WikiStatus,
 )
 from .pagination import chunk_utf8, cursor_offset, decode_cursor, encode_cursor
-from .url_hygiene import sanitize_legacy_edg_urls
+from .url_hygiene import HygieneBudget, sanitize_legacy_edg_urls
 from .wikitext import extract_iso_slots, has_agenda_signal
 
 logger = get_logger("tools")
@@ -86,17 +88,31 @@ def _sanitize_client_content(
     ctx: ServerContext,
     content: str,
     *,
-    deadline: float | None = None,
+    deadline: float | None,
+    budget: HygieneBudget,
+    refresh: bool = False,
 ) -> str:
-    """Rewrite legacy ``wiki.edg.com`` links before returning wikitext to clients."""
-    return sanitize_legacy_edg_urls(
-        content,
-        config=ctx.config,
-        cache=ctx.cache,
-        client=ctx.client,
-        discover_meetings=lambda: _discover_meetings(ctx),
-        deadline=deadline,
-    )
+    """Rewrite legacy ``wiki.edg.com`` links before returning wikitext to clients.
+
+    Hygiene is best-effort: the page itself was already retrieved successfully, so
+    a failure in the secondary existence check must not discard that response.
+    """
+    try:
+        return sanitize_legacy_edg_urls(
+            content,
+            config=ctx.config,
+            cache=ctx.cache,
+            client=ctx.client,
+            fetcher=ctx.fetcher,
+            budget=budget,
+            deadline=deadline,
+            cache_ttl_s=ctx.calendar.ttl_seconds(),
+            refresh=refresh,
+            discover_meetings=lambda: _discover_meetings(ctx),
+        )
+    except Exception as exc:  # noqa: BLE001 - never fail an otherwise-good response
+        logger.warning("URL hygiene skipped: %s", safe_exception_summary(exc))
+        return content
 
 
 def _outlinks_cache_key(title: str) -> str:
@@ -242,11 +258,13 @@ def search_wiki(
     offset = cursor_offset(cursor)
     resp = ctx.client.search(query, limit=limit, namespace=namespace, offset=offset)
     search = resp.get("query", {}).get("search", [])
+    deadline = composite_deadline(DEFAULT_COMPOSITE_MAX_WAIT_S)
+    budget = HygieneBudget()
     hits = []
     for item in search:
         snippet = item.get("snippet") if include_snippet else None
         if snippet is not None:
-            snippet = _sanitize_client_content(ctx, snippet)
+            snippet = _sanitize_client_content(ctx, snippet, deadline=deadline, budget=budget)
         hits.append(
             SearchHit(
                 title=item["title"],
@@ -276,13 +294,16 @@ def get_page(
     refresh: bool = False,
     max_wait_s: float | None = None,
 ) -> PageContent:
-    """Return verbatim wikitext for a page (or one section), chunked if large.
+    """Return a page's wikitext (or one section), chunked if large.
+
+    Legacy ``wiki.edg.com`` links are rewritten or annotated before the response.
 
     Raises:
         PageNotFound: if the page does not exist.
     """
     max_bytes = _clamp(max_bytes, 1024, 256 * 1024)
     start = cursor_offset(cursor)
+    deadline = composite_deadline(max_wait_s if max_wait_s is not None else DEFAULT_COMPOSITE_MAX_WAIT_S)
 
     if section is not None:
         outcome = ctx.fetcher.get_page_section(
@@ -303,7 +324,13 @@ def get_page(
             raise PageNotFound(f"Page or section not found: {title!r} section {section}")
         raise PageNotFound(f"Page not found: {title!r}")
     prov = ctx.provenance(outcome)
-    content = _sanitize_client_content(ctx, outcome.content)
+    content = _sanitize_client_content(
+        ctx,
+        outcome.content,
+        deadline=deadline,
+        budget=HygieneBudget(),
+        refresh=refresh,
+    )
 
     chunk_text, byte_start, byte_end, total, has_more = chunk_utf8(content, start=start, max_bytes=max_bytes)
     next_cursor = encode_cursor({"o": byte_end}) if has_more else None
@@ -443,11 +470,13 @@ def get_recent_changes(
     limit = _clamp(limit, 1, _MAX_LIST_LIMIT)
     cont = decode_cursor(cursor).get("c")
     resp = ctx.client.recent_changes(namespace=namespace, since=since, limit=limit, cont=cont)
+    deadline = composite_deadline(DEFAULT_COMPOSITE_MAX_WAIT_S)
+    budget = HygieneBudget()
     changes = []
     for c in resp.get("query", {}).get("recentchanges", []):
         comment = c.get("comment")
         if comment is not None:
-            comment = _sanitize_client_content(ctx, comment)
+            comment = _sanitize_client_content(ctx, comment, deadline=deadline, budget=budget)
         changes.append(
             RecentChange(
                 type=c.get("type", "edit"),
@@ -469,7 +498,7 @@ def get_recent_changes(
 # get_meeting_overview
 # --------------------------------------------------------------------------- #
 def get_meeting_overview(ctx: ServerContext, meeting: str | None = None) -> MeetingOverview:
-    """Return a meeting's landing page (verbatim) plus its deterministic outlink index."""
+    """Return a meeting's landing page plus its deterministic outlink index."""
     deadline = composite_deadline(DEFAULT_COMPOSITE_MAX_WAIT_S)
     title = _resolve_meeting(ctx, meeting)
     home = get_page(ctx, title, max_wait_s=_remaining(deadline))
@@ -496,12 +525,13 @@ def get_meeting_sessions(
 
     The server does NOT compose a schedule (room/day tables are not reliably
     parseable). It returns deterministic ``iso_slots`` (agenda time boundaries,
-    when present) plus the relevant pages verbatim; the calling LLM composes.
+    when present) plus the relevant pages; the calling LLM composes.
     """
     title = _resolve_meeting(ctx, meeting)
     max_page_bytes = _clamp(max_page_bytes, 512, 64 * 1024)
     group_tokens = [g.lower() for g in (groups or [])]
     deadline = composite_deadline(DEFAULT_COMPOSITE_MAX_WAIT_S)
+    budget = HygieneBudget()
 
     candidates = [t for t in _cached_page_outlinks(ctx, title, deadline=deadline) if t.startswith(title)]
     fetched = (
@@ -533,7 +563,7 @@ def get_meeting_sessions(
 
         include_body = include_wikitext and (is_agenda or matched_group)
         if include_body:
-            sanitized = _sanitize_client_content(ctx, content, deadline=deadline)
+            sanitized = _sanitize_client_content(ctx, content, deadline=deadline, budget=budget)
         else:
             sanitized = content
         body, body_cursor, truncated = _bundle_body(sanitized, include_body, max_page_bytes)

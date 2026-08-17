@@ -12,9 +12,11 @@ for the pre-1.0 API stability policy and deprecation timeline.
 
 ### Added
 
-- Tool-boundary rewrite or stale annotation of discontinued ``wiki.edg.com`` links in
-  MCP responses (``get_page`` bodies, optional search snippets, recent-change comments,
-  and bundled meeting-session wikitext when a body is included); fetch/cache wikitext
+- Tool-boundary rewrite of discontinued `wiki.edg.com` links in MCP responses
+  (`get_page` bodies, optional search snippets, recent-change comments, and bundled
+  meeting-session wikitext when a body is included). A link with no known successor
+  keeps its URL followed by the literal marker `(stale URL)`, chosen so the annotation
+  cannot open a MediaWiki link sequence inside a wikitext field. Fetch/cache wikitext
   remains byte-for-byte ([#98](https://github.com/cppalliance/wg21-wiki-mcp/issues/98)).
 
 ### Changed
@@ -26,6 +28,9 @@ for the pre-1.0 API stability policy and deprecation timeline.
   adding the `url_remaps` table to the shared SQLite cache schema.
 - Stabilized cache microbenchmarks (`tests/test_benchmark.py`) with batched put/get and
   count loops so CI regression means are ms-scale instead of µs-scale timer noise.
+- Legacy-URL existence checks now run through the shared `PageFetcher` (cache-first,
+  single-flight) instead of a direct client fetch, and the probe budget, deadline, and
+  `refresh` flag are threaded per tool response rather than per sanitized field.
 
 ## [0.3.1] - 2026-07-31
 

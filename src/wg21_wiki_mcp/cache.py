@@ -36,6 +36,18 @@ CREATE TABLE IF NOT EXISTS url_remaps (
 """
 
 
+def _age_seconds(fetched_at: str, now: datetime | None = None) -> float:
+    """Seconds since ``fetched_at`` (inf when the stored timestamp is unparseable)."""
+    now = now or datetime.now(timezone.utc)
+    try:
+        fetched = datetime.fromisoformat(fetched_at)
+    except ValueError:
+        return float("inf")
+    if fetched.tzinfo is None:
+        fetched = fetched.replace(tzinfo=timezone.utc)
+    return (now - fetched).total_seconds()
+
+
 @dataclass(frozen=True)
 class CacheEntry:
     """One cached page revision: verbatim content plus identity/freshness metadata."""
@@ -51,14 +63,23 @@ class CacheEntry:
 
     def age_seconds(self, now: datetime | None = None) -> float:
         """Return seconds since this entry was fetched (inf if the time is unparseable)."""
-        now = now or datetime.now(timezone.utc)
-        try:
-            fetched = datetime.fromisoformat(self.fetched_at)
-        except ValueError:
-            return float("inf")
-        if fetched.tzinfo is None:
-            fetched = fetched.replace(tzinfo=timezone.utc)
-        return (now - fetched).total_seconds()
+        return _age_seconds(self.fetched_at, now)
+
+
+@dataclass(frozen=True)
+class UrlRemap:
+    """A cached rewrite decision for one legacy URL.
+
+    ``target_url`` is ``None`` when the source is known stale with no replacement.
+    """
+
+    source_url: str
+    target_url: str | None
+    fetched_at: str
+
+    def age_seconds(self, now: datetime | None = None) -> float:
+        """Return seconds since this remap was decided (inf if unparseable)."""
+        return _age_seconds(self.fetched_at, now)
 
 
 def title_hash(title: str) -> str:
@@ -189,11 +210,8 @@ class Cache:
         """Return the number of cached pages."""
         return int(self._connect().execute("SELECT COUNT(*) FROM pages").fetchone()[0])
 
-    def get_url_remap(self, source_url: str) -> tuple[str | None, str] | None:
-        """Return ``(target_url, fetched_at)`` for a legacy URL remap, or ``None`` if absent.
-
-        ``target_url`` is ``None`` when the source is known stale with no replacement.
-        """
+    def get_url_remap(self, source_url: str) -> UrlRemap | None:
+        """Return the cached :class:`UrlRemap` for ``source_url``, or None if absent."""
         row = (
             self._connect()
             .execute(
@@ -204,7 +222,11 @@ class Cache:
         )
         if row is None:
             return None
-        return row["target_url"], row["fetched_at"]
+        return UrlRemap(
+            source_url=source_url,
+            target_url=row["target_url"],
+            fetched_at=row["fetched_at"],
+        )
 
     def put_url_remap(self, source_url: str, target_url: str | None) -> None:
         """Insert or replace a legacy URL remap entry."""

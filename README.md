@@ -5,8 +5,10 @@ that gives an LLM agent read access to the **WG21 (ISO C++) committee wiki** at
 `wiki.isocpp.org` as a **verifiable source of truth**.
 
 The server authenticates with your credentials, fetches pages over the
-MediaWiki API, and returns **exact** wiki text with a clickable URL and revision
-id. See [ARCHITECTURE.md](ARCHITECTURE.md) for design detail and
+MediaWiki API, and returns wiki text with a clickable URL and revision id. Text
+is **exact** apart from one documented exception: links to the discontinued
+`wiki.edg.com` host are rewritten or annotated at the tool boundary (see
+[URL hygiene](#url-hygiene)). See [ARCHITECTURE.md](ARCHITECTURE.md) for design detail and
 [SECURITY.md](SECURITY.md) for credential handling.
 
 > Access requires WG21 membership. This tool stores nothing confidential in its
@@ -71,10 +73,14 @@ Minimal Cursor / `uvx` example:
 See [.env.example](.env.example) for optional tuning (cache directory, TTLs,
 meeting overrides, legacy URL rewrite timeouts).
 
+### URL hygiene
+
 Returned page text is verbatim wiki content except that discontinued
-``wiki.edg.com`` links are rewritten to ``wiki.isocpp.org`` (or marked stale)
-in page bodies, bundled meeting-session wikitext (when a body is included),
-optional search snippets, and recent-change comments.
+`wiki.edg.com` links are rewritten to `wiki.isocpp.org` in page bodies, bundled
+meeting-session wikitext (when a body is included), optional search snippets,
+and recent-change comments. A link with no known successor keeps its original
+URL followed by the literal marker `(stale URL)`. Fetch and cache stay
+byte-for-byte; the rewrite happens only at the tool boundary.
 
 ## Tools
 

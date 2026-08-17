@@ -4,8 +4,9 @@ These Pydantic models are the MCP tools' structured outputs. They carry only
 data that is API-provided or deterministically extracted. Wikitext in
 ``content``/``wikitext`` (and sanitized text fields such as search snippets and
 edit comments) matches wiki storage except that legacy ``wiki.edg.com`` links
-may be rewritten to ``wiki.isocpp.org`` (or marked stale) at the tool boundary
-before the MCP response; fetch and cache remain byte-for-byte.
+may be rewritten to ``wiki.isocpp.org`` at the tool boundary before the MCP
+response. A link with no known successor keeps its original URL followed by the
+literal marker ``(stale URL)``. Fetch and cache remain byte-for-byte.
 """
 
 from __future__ import annotations
@@ -76,8 +77,9 @@ class PageContent(BaseModel):
     section: int | None = Field(default=None, description="Section index if a section was requested.")
     content: str = Field(
         description=(
-            "Wikitext from the wiki except legacy wiki.edg.com links rewritten "
-            "to wiki.isocpp.org (or marked stale) at the tool boundary."
+            "Wikitext from the wiki except legacy wiki.edg.com links rewritten to "
+            "wiki.isocpp.org at the tool boundary; an unresolvable link keeps its "
+            "original URL followed by the literal marker '(stale URL)'."
         ),
     )
     chunk: Chunk
@@ -94,8 +96,9 @@ class SearchHit(BaseModel):
     snippet: str | None = Field(
         default=None,
         description=(
-            "API-generated excerpt when opted in; legacy wiki.edg.com links "
-            "rewritten at the tool boundary when present."
+            "API-generated excerpt when opted in; legacy wiki.edg.com links are "
+            "rewritten at the tool boundary, or kept and followed by the literal "
+            "marker '(stale URL)' when unresolvable."
         ),
     )
     url: str
@@ -167,7 +170,11 @@ class RecentChange(BaseModel):
     user: str | None = None
     comment: str | None = Field(
         default=None,
-        description=("Edit summary; legacy wiki.edg.com links rewritten at the tool boundary when present."),
+        description=(
+            "Edit summary; legacy wiki.edg.com links are rewritten at the tool "
+            "boundary, or kept and followed by the literal marker '(stale URL)' "
+            "when unresolvable."
+        ),
     )
     url: str
 
@@ -213,7 +220,8 @@ class SessionBundle(BaseModel):
     """Raw materials for the LLM to compose a meeting schedule. Not a schedule.
 
     Bundled wikitext matches wiki storage except legacy wiki.edg.com link rewrite
-    at the tool boundary when a page body is included.
+    at the tool boundary when a page body is included; an unresolvable link keeps
+    its original URL followed by the literal marker ``(stale URL)``.
     """
 
     meeting: str
