@@ -51,14 +51,55 @@ def _client(tmp_path, monkeypatch, site, **cfg):
     return client
 
 
+def _read_method_responder(action, params):
+    if params.get("list") == "search":
+        return {
+            "query": {
+                "search": [
+                    {
+                        "title": "Hit",
+                        "ns": 4,
+                        "size": 1,
+                        "wordcount": 2,
+                        "timestamp": "2026-01-01T00:00:00Z",
+                        "snippet": "s",
+                    }
+                ]
+            },
+            "continue": {"sroffset": 30},
+        }
+    if params.get("list") == "allpages":
+        return {"query": {"allpages": [{"title": "AP", "ns": 0}]}, "continue": {"apcontinue": "next"}}
+    if params.get("list") == "recentchanges":
+        return {
+            "query": {
+                "recentchanges": [
+                    {
+                        "type": "edit",
+                        "title": "RC",
+                        "revid": 5,
+                        "old_revid": 4,
+                        "timestamp": "2026-06-01T00:00:00Z",
+                        "user": "u",
+                        "comment": "c",
+                    }
+                ]
+            },
+            "continue": {"rccontinue": "rc2"},
+        }
+    if params.get("siprop") == "namespaces":
+        return {"query": {"namespaces": {"0": {"*": ""}, "4": {"*": "Project", "canonical": "Project"}}}}
+    return {"query": {}, "continue": {}}
+
+
 def test_read_methods_forward_params(tmp_path, monkeypatch):
-    site = RecordingSite(lambda action, params: {"query": {}, "continue": {}})
+    site = RecordingSite(_read_method_responder)
     client = _client(tmp_path, monkeypatch, site)
 
-    client.search("hello", limit=3, namespace=4, offset=6)
-    client.list_pages(namespace=0, prefix="Pre", limit=10, cont="20")
-    client.list_namespaces()
-    client.recent_changes(namespace=2, since="2026-06-01T00:00:00Z", limit=5, cont="c1")
+    search_page = client.search("hello", limit=3, namespace=4, offset=6)
+    list_page = client.list_pages(namespace=0, prefix="Pre", limit=10, cont="20")
+    namespaces = client.list_namespaces()
+    recent_page = client.recent_changes(namespace=2, since="2026-06-01T00:00:00Z", limit=5, cont="c1")
     client.page_links("Some Title", limit=50, cont="pl1")
     client.statistics()
 
@@ -69,6 +110,16 @@ def test_read_methods_forward_params(tmp_path, monkeypatch):
     assert search_params["srsearch"] == "hello" and search_params["srnamespace"] == 4
     rc_params = next(p for a, p in site.calls if p.get("list") == "recentchanges")
     assert rc_params["rcnamespace"] == 2 and rc_params["rcend"].startswith("2026")
+
+    # Mapped dataclass fields + continuation tokens: guards against a silent
+    # continuation-key rename (sroffset/apcontinue/rccontinue) that params-only
+    # assertions cannot catch.
+    assert search_page.results[0].title == "Hit" and search_page.results[0].namespace == 4
+    assert search_page.results[0].snippet == "s" and search_page.next_offset == 30
+    assert list_page.items[0].title == "AP" and list_page.next_cont == "next"
+    assert recent_page.items[0].title == "RC" and recent_page.items[0].revid == 5
+    assert recent_page.next_cont == "rc2"
+    assert any(n.id == 4 and n.name == "Project" and n.canonical == "Project" for n in namespaces)
 
 
 def test_api_non_auth_error_raises(tmp_path, monkeypatch):

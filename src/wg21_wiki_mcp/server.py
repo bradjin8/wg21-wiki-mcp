@@ -113,12 +113,16 @@ mcp = FastMCP(
     "wg21-wiki",
     instructions=(
         "Read-only access to the WG21 (ISO C++) committee wiki as a verifiable "
-        "source of truth. Page content is returned verbatim with a clickable URL "
-        "and revision id; treat returned text as authoritative. Search snippets are "
-        "API-generated excerpts (truncated, reformatted, with highlight markup) and "
-        "must not be cited as verbatim wiki content — use get_page for authoritative "
-        "text. The server never composes meeting schedules — use get_meeting_sessions "
-        "to get the raw materials and compose them yourself."
+        "source of truth. Page content is returned as stored on the wiki, with a "
+        "clickable URL and revision id, except that legacy wiki.edg.com links "
+        "embedded in wikitext, search snippets, or edit comments are rewritten to "
+        "wiki.isocpp.org (or annotated with the literal marker '(stale URL)') "
+        "before the response is returned. Search snippets are API-generated "
+        "excerpts (truncated, reformatted, CirrusSearch highlight spans stripped) "
+        "and must not be cited as verbatim wiki content — use get_page for "
+        "authoritative text. The "
+        "server never composes meeting schedules — use get_meeting_sessions to get "
+        "the raw materials and compose them yourself."
     ),
     lifespan=_lifespan,
 )
@@ -134,10 +138,10 @@ def search_wiki(
 ) -> SearchResults:
     """Full-text search the wiki. Returns titles and URLs.
 
-    Snippets are API-generated excerpts (truncated, reformatted, with highlight
-    markup) and must not be cited as verbatim wiki content — use ``get_page`` for
-    authoritative text. Pass ``include_snippet=True`` only when you need those
-    excerpts for disambiguation; they are omitted by default.
+    Snippets are API-generated excerpts (truncated, reformatted, CirrusSearch
+    highlight spans stripped) and must not be cited as verbatim wiki content —
+    use ``get_page`` for authoritative text. Pass ``include_snippet=True`` only
+    when you need those excerpts for disambiguation; they are omitted by default.
     """
     return _wrap(
         tools.search_wiki,
@@ -158,7 +162,7 @@ def get_page(
     cursor: str | None = None,
     refresh: bool = False,
 ) -> PageContent:
-    """Return verbatim wikitext for a page (or one section), with provenance; chunked if large."""
+    """Wikitext for a page (or section); legacy wiki.edg.com links rewritten or marked ``(stale URL)``."""
     return _wrap(
         tools.get_page,
         get_context(),
@@ -190,7 +194,7 @@ def list_meetings(limit: int = 10, cursor: str | None = None) -> MeetingList:
 
 @mcp.tool()
 def get_meeting_overview(meeting: str | None = None) -> MeetingOverview:
-    """Return a meeting's landing page (verbatim) plus its subpage outlink index.
+    """Return a meeting's landing page plus its subpage outlink index.
 
     Defaults to the latest meeting.
     """
@@ -204,12 +208,7 @@ def get_meeting_sessions(
     include_wikitext: bool = True,
     max_page_bytes: int = tools._DEFAULT_BUNDLE_PAGE_MAX_BYTES,
 ) -> SessionBundle:
-    """Return raw materials to compose a meeting's schedule.
-
-    Deterministic agenda time slots plus relevant pages verbatim. The server does
-    not compose a schedule; the caller composes from the bundle. Defaults to the
-    latest meeting.
-    """
+    """Schedule bundle; bundled wikitext may have legacy wiki.edg.com links rewritten or marked ``(stale URL)``."""
     return _wrap(
         tools.get_meeting_sessions,
         get_context(),

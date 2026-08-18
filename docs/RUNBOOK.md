@@ -267,10 +267,10 @@ repository.
 | Goal | Tool | Notes |
 | --- | --- | --- |
 | Find pages by keyword | `search_wiki` | Snippets are **not** verbatim; always follow with `get_page`. |
-| Read authoritative text | `get_page` | Byte-faithful wikitext + provenance (`url`, `oldid_url`, `revid`). |
+| Read authoritative text | `get_page` | Wikitext + provenance (`url`, `oldid_url`, `revid`); verbatim except legacy `wiki.edg.com` links are rewritten or marked `(stale URL)`. |
 | Browse a namespace | `list_namespaces` → `list_pages` | Resolve numeric namespace ids first; `list_pages` includes `namespace_name`. |
 | Discover meetings | `list_meetings` | Newest first; `is_active` and `window_start`/`window_end` when the public calendar matches. |
-| Meeting landing + index | `get_meeting_overview` | Verbatim home page + outlink index. |
+| Meeting landing + index | `get_meeting_overview` | Home page (same legacy-link hygiene as `get_page`) + outlink index. |
 | Compose a schedule | `get_meeting_sessions` | Returns a **bundle** (time slots + pages); the agent composes the schedule. |
 | Track recent edits | `get_recent_changes` | High value during meetings. |
 | Health check | `wiki_status` | Auth path, TTL mode, cache stats; no wiki content. |
@@ -286,9 +286,10 @@ Large pages are split on **UTF-8 byte boundaries** (default ~48 KiB per chunk).
 2. While `chunk.has_more`, call `get_page(title, cursor=chunk.next_cursor)`.
 3. Concatenate all `content` strings in order.
 
-Reassembled text is byte-for-byte identical to the wiki revision. Provenance
-(`revid`, URLs) is the same on every chunk. For sections, pass the same
-`section` index on every chunk request.
+Reassembled text matches the body `get_page` returns — verbatim wikitext except
+legacy `wiki.edg.com` links rewritten or marked `(stale URL)` at the tool
+boundary. Provenance (`revid`, URLs) is the same on every chunk. For sections,
+pass the same `section` index on every chunk request.
 
 ### `refresh=True`
 
@@ -308,7 +309,8 @@ Every `get_page` result includes:
 - `provenance.oldid_url`: permanent link pinned to the exact `revid`
 - `provenance.from_cache`: whether the body was served from SQLite
 
-Quote from `content` and cite `oldid_url` when the answer must be auditable.
+Quote from `content` (verbatim except rewritten/marked legacy links) and cite
+`oldid_url` when the answer must be auditable.
 
 ### Error branching
 

@@ -5,8 +5,10 @@ that gives an LLM agent read access to the **WG21 (ISO C++) committee wiki** at
 `wiki.isocpp.org` as a **verifiable source of truth**.
 
 The server authenticates with your credentials, fetches pages over the
-MediaWiki API, and returns **exact** wiki text with a clickable URL and revision
-id. See [ARCHITECTURE.md](ARCHITECTURE.md) for design detail and
+MediaWiki API, and returns wiki text with a clickable URL and revision id. Text
+is **exact** apart from one documented exception: links to the discontinued
+`wiki.edg.com` host are rewritten or annotated at the tool boundary (see
+[URL hygiene](#url-hygiene)). See [ARCHITECTURE.md](ARCHITECTURE.md) for design detail and
 [SECURITY.md](SECURITY.md) for credential handling.
 
 > Access requires WG21 membership. This tool stores nothing confidential in its
@@ -69,7 +71,23 @@ Minimal Cursor / `uvx` example:
 ```
 
 See [.env.example](.env.example) for optional tuning (cache directory, TTLs,
-meeting overrides).
+meeting overrides, legacy URL rewrite timeouts).
+
+### URL hygiene
+
+Returned page text is verbatim wiki content except that discontinued
+`wiki.edg.com` links are rewritten to `wiki.isocpp.org` in page bodies, bundled
+meeting-session wikitext (when a body is included), optional search snippets,
+and recent-change comments. A link with no known successor keeps its original
+URL followed by the literal marker `(stale URL)`. Fetch and cache stay
+byte-for-byte; the rewrite happens only at the tool boundary. Resolution is
+best-effort and network-dependent: it is bounded by the per-response probe budget
+and `ISOCPP_WIKI_URL_HYGIENE_TIMEOUT_S` (default **12** seconds). A `(stale URL)`
+marker can also mean the probe budget was exhausted or a probe failed, not only
+that no successor exists; if hygiene hits an internal error it is skipped
+entirely and legacy links are returned unrewritten and unmarked. Tune remap
+freshness with `ISOCPP_WIKI_URL_REMAP_TTL` (default **604800** seconds / one
+week).
 
 ## Tools
 
@@ -90,7 +108,7 @@ ctx = ServerContext.create(Config.from_env())
 hits = tools.search_wiki(ctx, "some topic", limit=5)
 page = tools.get_page(ctx, hits.hits[0].title)
 print(page.provenance.url, page.provenance.revid)
-print(page.content)  # exact wikitext
+print(page.content)  # sanitized wikitext (legacy EDG links rewritten)
 ```
 
 ## Error contract

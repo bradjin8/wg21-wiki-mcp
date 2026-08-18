@@ -21,7 +21,16 @@ from wg21_wiki_mcp.config import Config, Credentials
 from wg21_wiki_mcp.context import ServerContext
 from wg21_wiki_mcp.fetch import PageFetcher
 from wg21_wiki_mcp.models import CalendarStatus
-from wg21_wiki_mcp.wiki_client import FetchedPage
+from wg21_wiki_mcp.wiki_client import (
+    FetchedPage,
+    NamespaceItem,
+    PageListItem,
+    PageListPage,
+    RecentChangeItem,
+    RecentChangesPage,
+    SearchPage,
+    SearchResult,
+)
 
 BASE_URL = "https://wiki.example.org"
 
@@ -195,32 +204,53 @@ class FakeWikiClient:
             out[req] = page.revid if page else None
         return out
 
-    def search(self, query: str, *, limit: int, namespace: int | None, offset: int) -> dict:
+    def search(self, query: str, *, limit: int, namespace: int | None, offset: int) -> SearchPage:
         window = self.search_results[offset : offset + limit]
-        resp: dict = {"query": {"search": window}}
-        if offset + limit < len(self.search_results):
-            resp["continue"] = {"sroffset": offset + limit}
-        return resp
+        results = [
+            SearchResult(
+                title=item["title"],
+                namespace=item.get("ns", 0),
+                size=item.get("size"),
+                wordcount=item.get("wordcount"),
+                timestamp=item.get("timestamp"),
+                snippet=item.get("snippet"),
+            )
+            for item in window
+        ]
+        next_offset = offset + limit if offset + limit < len(self.search_results) else None
+        return SearchPage(results=results, next_offset=next_offset)
 
-    def list_pages(self, *, namespace: int, prefix: str | None, limit: int, cont: str | None) -> dict:
+    def list_pages(self, *, namespace: int, prefix: str | None, limit: int, cont: str | None) -> PageListPage:
         start = int(cont) if cont else 0
         pool = [p for p in self.allpages if (not prefix or p["title"].startswith(prefix))]
         window = pool[start : start + limit]
-        resp: dict = {"query": {"allpages": window}}
-        if start + limit < len(pool):
-            resp["continue"] = {"apcontinue": str(start + limit)}
-        return resp
+        items = [PageListItem(title=p["title"], namespace=p.get("ns", namespace)) for p in window]
+        next_cont = str(start + limit) if start + limit < len(pool) else None
+        return PageListPage(items=items, next_cont=next_cont)
 
-    def list_namespaces(self) -> dict:
-        return {"query": {"namespaces": self.namespaces}}
+    def list_namespaces(self) -> list[NamespaceItem]:
+        return [
+            NamespaceItem(id=int(ns_id_str), name=ns.get("*") or "", canonical=ns.get("canonical"))
+            for ns_id_str, ns in self.namespaces.items()
+        ]
 
-    def recent_changes(self, *, namespace, since, limit, cont) -> dict:
+    def recent_changes(self, *, namespace, since, limit, cont) -> RecentChangesPage:
         start = int(cont) if cont else 0
         window = self.recent[start : start + limit]
-        resp: dict = {"query": {"recentchanges": window}}
-        if start + limit < len(self.recent):
-            resp["continue"] = {"rccontinue": str(start + limit)}
-        return resp
+        items = [
+            RecentChangeItem(
+                type=c.get("type", "edit"),
+                title=c["title"],
+                revid=c.get("revid"),
+                old_revid=c.get("old_revid"),
+                timestamp=c.get("timestamp"),
+                user=c.get("user"),
+                comment=c.get("comment"),
+            )
+            for c in window
+        ]
+        next_cont = str(start + limit) if start + limit < len(self.recent) else None
+        return RecentChangesPage(items=items, next_cont=next_cont)
 
     def page_links(self, title: str, *, limit: int, cont: str | None, timeout: float | None = None) -> dict:
         self.page_links_calls += 1

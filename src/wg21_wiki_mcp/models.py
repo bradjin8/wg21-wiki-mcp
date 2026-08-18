@@ -1,8 +1,12 @@
 """Structured response models and error types shared across tools.
 
 These Pydantic models are the MCP tools' structured outputs. They carry only
-data that is API-provided or deterministically extracted; verbatim wiki text is
-returned in dedicated ``content``/``wikitext`` fields and never transformed.
+data that is API-provided or deterministically extracted. Wikitext in
+``content``/``wikitext`` (and sanitized text fields such as search snippets and
+edit comments) matches wiki storage except that legacy ``wiki.edg.com`` links
+may be rewritten to ``wiki.isocpp.org`` at the tool boundary before the MCP
+response. A link with no known successor keeps its original URL followed by the
+literal marker ``(stale URL)``. Fetch and cache remain byte-for-byte.
 """
 
 from __future__ import annotations
@@ -67,11 +71,17 @@ class Chunk(BaseModel):
 
 
 class PageContent(BaseModel):
-    """Verbatim wikitext for a page (or a chunk of it) plus provenance."""
+    """Wikitext for a page (or a chunk of it) plus provenance."""
 
     provenance: Provenance
     section: int | None = Field(default=None, description="Section index if a section was requested.")
-    content: str = Field(description="Exact wikitext, byte-for-byte as stored on the wiki.")
+    content: str = Field(
+        description=(
+            "Wikitext from the wiki except legacy wiki.edg.com links rewritten to "
+            "wiki.isocpp.org at the tool boundary; an unresolvable link keeps its "
+            "original URL followed by the literal marker '(stale URL)'."
+        ),
+    )
     chunk: Chunk
 
 
@@ -83,7 +93,15 @@ class SearchHit(BaseModel):
     size: int | None = None
     wordcount: int | None = None
     timestamp: str | None = None
-    snippet: str | None = None
+    snippet: str | None = Field(
+        default=None,
+        description=(
+            "API-generated excerpt when opted in, with CirrusSearch highlight "
+            "spans stripped; legacy wiki.edg.com links are rewritten at the tool "
+            "boundary, or kept and followed by the literal marker '(stale URL)' "
+            "when unresolvable."
+        ),
+    )
     url: str
 
 
@@ -143,7 +161,7 @@ class MeetingList(BaseModel):
 
 
 class RecentChange(BaseModel):
-    """A single entry from the wiki's recent-changes feed (API-provided)."""
+    """A single recent-changes feed entry; edit comments may have legacy EDG URLs rewritten."""
 
     type: str
     title: str
@@ -151,7 +169,14 @@ class RecentChange(BaseModel):
     old_revid: int | None = None
     timestamp: str | None = None
     user: str | None = None
-    comment: str | None = None
+    comment: str | None = Field(
+        default=None,
+        description=(
+            "Edit summary; legacy wiki.edg.com links are rewritten at the tool "
+            "boundary, or kept and followed by the literal marker '(stale URL)' "
+            "when unresolvable."
+        ),
+    )
     url: str
 
 
@@ -163,7 +188,7 @@ class RecentChanges(BaseModel):
 
 
 class MeetingOverview(BaseModel):
-    """A meeting's landing page (verbatim) plus a deterministic outlink index."""
+    """A meeting's landing page plus a deterministic outlink index."""
 
     meeting: str
     home: PageContent
@@ -181,7 +206,7 @@ class IsoSlot(BaseModel):
 
 
 class BundledPage(BaseModel):
-    """One raw page in a session bundle (verbatim, with provenance)."""
+    """One page in a session bundle (wikitext when included, with provenance)."""
 
     title: str
     role: Literal["agenda", "rooms", "evening", "working_group", "other"]
@@ -193,12 +218,17 @@ class BundledPage(BaseModel):
 
 
 class SessionBundle(BaseModel):
-    """Raw materials for the LLM to compose a meeting schedule. Not a schedule."""
+    """Raw materials for the LLM to compose a meeting schedule. Not a schedule.
+
+    Bundled wikitext matches wiki storage except legacy wiki.edg.com link rewrite
+    at the tool boundary when a page body is included; an unresolvable link keeps
+    its original URL followed by the literal marker ``(stale URL)``.
+    """
 
     meeting: str
     composition_disclaimer: str = (
         "No schedule is computed by the server. Compose the answer from the bundled "
-        "verbatim pages; iso_slots are time boundaries only, not group/room assignments."
+        "pages; iso_slots are time boundaries only, not group/room assignments."
     )
     iso_slots: list[IsoSlot] = Field(default_factory=list)
     iso_slots_extraction: Literal["success", "partial", "not_found"] = "not_found"

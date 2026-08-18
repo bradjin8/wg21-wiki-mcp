@@ -56,6 +56,31 @@ def cursor_offset(cursor: str | None, *, default: int = 0) -> int:
     return _validated_offset(payload["o"])
 
 
+def page_chunk_offset(
+    cursor: str | None,
+    *,
+    revid: int | None,
+    total_bytes: int,
+) -> int:
+    """Return a byte offset bound to ``revid`` and ``total_bytes``.
+
+    Sanitized page text can change length between calls, so a bare offset is not
+    enough to resume chunking safely.
+    """
+    payload = decode_cursor(cursor)
+    if not payload:
+        return 0
+    offset = _validated_offset(payload.get("o", 0))
+    if payload.get("r") != revid or payload.get("t") != total_bytes:
+        raise McpError(ErrorData(code=INVALID_PARAMS, message="Invalid or expired cursor."))
+    return offset
+
+
+def encode_page_chunk_cursor(byte_end: int, *, revid: int | None, total_bytes: int) -> str:
+    """Encode a chunk cursor bound to the sanitized body identity."""
+    return encode_cursor({"o": byte_end, "r": revid, "t": total_bytes})
+
+
 def _floor_utf8_boundary(data: bytes, index: int) -> int:
     """Move ``index`` left to the start of a UTF-8 character (or 0)."""
     if index >= len(data):

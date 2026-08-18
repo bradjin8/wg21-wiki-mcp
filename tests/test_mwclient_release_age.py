@@ -254,7 +254,7 @@ def test_committed_waiver_artifact_is_valid() -> None:
     waiver_path = Path(__file__).resolve().parents[1] / "config" / "mwclient-release-age-waiver.json"
     waiver = load_waiver_file(waiver_path)
 
-    assert waiver.expires_on == date(2026, 8, 13)
+    assert waiver.expires_on == date(2026, 12, 31)
     assert "88" in waiver.tracking_issue
     assert waiver.reason.strip()
 

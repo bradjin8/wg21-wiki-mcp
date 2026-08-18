@@ -10,6 +10,32 @@ for the pre-1.0 API stability policy and deprecation timeline.
 
 ## [Unreleased]
 
+### Added
+
+- Tool-boundary rewrite of discontinued `wiki.edg.com` links in MCP responses
+  (`get_page` bodies, optional search snippets, recent-change comments, and bundled
+  meeting-session wikitext when a body is included). A link with no known successor
+  keeps its URL followed by the literal marker `(stale URL)`, chosen so the annotation
+  cannot open a MediaWiki link sequence inside a wikitext field. Fetch/cache wikitext
+  remains byte-for-byte ([#98](https://github.com/cppalliance/wg21-wiki-mcp/issues/98)).
+- Optional tuning for legacy URL hygiene: `ISOCPP_WIKI_URL_HYGIENE_TIMEOUT_S`
+  (per-probe HTTP timeout cap, default **12** seconds) and
+  `ISOCPP_WIKI_URL_REMAP_TTL` (remap-cache TTL, default **604800** seconds /
+  one week). See [.env.example](.env.example).
+
+### Changed
+
+- Extended the `mwclient` PyPI release-age hard-gate waiver to **2026-12-31** while
+  [#88](https://github.com/cppalliance/wg21-wiki-mcp/issues/88) succession work continues
+  (initial waiver lapsed 2026-08-13; `0.11.0` remains the latest PyPI release).
+- Refreshed `benchmarks/cache-baseline.json` on CI (`ubuntu-latest`, Python 3.12) after
+  adding the `url_remaps` table to the shared SQLite cache schema.
+- Stabilized cache microbenchmarks (`tests/test_benchmark.py`) with batched put/get and
+  count loops so CI regression means are ms-scale instead of µs-scale timer noise.
+- Legacy-URL existence checks now run through the shared `PageFetcher` (cache-first,
+  single-flight) instead of a direct client fetch, and the probe budget, deadline, and
+  `refresh` flag are threaded per tool response rather than per sanitized field.
+
 ## [0.3.1] - 2026-07-31
 
 ### Added
@@ -28,7 +54,7 @@ for the pre-1.0 API stability policy and deprecation timeline.
   Rotation is documented in [docs/RUNBOOK.md](docs/RUNBOOK.md).
 - `shellcheck` lint step for `scripts/ci/*.sh` in the ubuntu/py3.12 `test` job.
 - Dated CI waiver for the `mwclient` 24-month PyPI release-age hard gate
-  (`config/mwclient-release-age-waiver.json`, expires **2026-08-13**); tracks
+  (`config/mwclient-release-age-waiver.json`); tracks
   succession work in issue [#88](https://github.com/cppalliance/wg21-wiki-mcp/issues/88).
   `scripts/check_mwclient_release_age.py` accepts `--waiver-file` / `--waiver-until`.
 - Meeting-time composite latency benchmarks (`tests/test_meeting_time_benchmark.py`),

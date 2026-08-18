@@ -2,8 +2,10 @@
 
 Each function takes a :class:`~wg21_wiki_mcp.context.ServerContext` and returns
 a structured Pydantic model. All page content flows through the centralized
-``PageFetcher``; nothing here transforms wiki text. List tools paginate with
-opaque cursors; ``get_page`` chunks long pages on UTF-8 boundaries.
+``PageFetcher``; the only transform applied before a response leaves the server
+is legacy ``wiki.edg.com`` URL hygiene (see :mod:`wg21_wiki_mcp.url_hygiene`).
+List tools paginate with opaque cursors; ``get_page`` chunks long pages on UTF-8
+boundaries.
 """
 
 from __future__ import annotations
@@ -11,10 +13,11 @@ from __future__ import annotations
 import json
 import re
 import threading
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Literal
 
-from .cache import CacheEntry, title_hash
+from .cache import CacheEntry, outlinks_key, title_hash
 from .context import ServerContext
 from .deadlines import MEETING_TOOL_TIMEOUT_MSG, composite_deadline, timeout_remaining
 from .fetch import DEFAULT_COMPOSITE_MAX_WAIT_S
@@ -41,7 +44,15 @@ from .models import (
     SessionBundle,
     WikiStatus,
 )
-from .pagination import chunk_utf8, cursor_offset, decode_cursor, encode_cursor
+from .pagination import (
+    chunk_utf8,
+    cursor_offset,
+    decode_cursor,
+    encode_cursor,
+    encode_page_chunk_cursor,
+    page_chunk_offset,
+)
+from .url_hygiene import HygieneBudget, sanitize_legacy_edg_urls, strip_cirrus_highlight_markup
 from .wikitext import extract_iso_slots, has_agenda_signal
 
 logger = get_logger("tools")
@@ -51,7 +62,6 @@ _DEFAULT_PAGE_MAX_BYTES = 48 * 1024
 _DEFAULT_BUNDLE_PAGE_MAX_BYTES = 8 * 1024
 _MAX_LIST_LIMIT = 50
 _MAX_NS_PAGE_LIMIT = 500
-_OUTLINKS_KEY_SEP = "\0outlinks="
 _MAX_OUTLINKS_LOCK_ENTRIES = DEFAULT_MAX_LOCK_ENTRIES
 
 
@@ -81,9 +91,56 @@ def _clamp(value: int, lo: int, hi: int) -> int:
     return max(lo, min(value, hi))
 
 
+def _sanitize_client_content(
+    ctx: ServerContext,
+    content: str,
+    *,
+    deadline: float | None,
+    budget: HygieneBudget,
+    refresh: bool = False,
+    discover_meetings: Callable[[], list[str]] | None = None,
+) -> str:
+    """Rewrite legacy ``wiki.edg.com`` links before returning wikitext to clients.
+
+    Hygiene is best-effort: the page itself was already retrieved successfully, so
+    a failure in the secondary existence check must not discard that response.
+    """
+    try:
+        return sanitize_legacy_edg_urls(
+            content,
+            config=ctx.config,
+            cache=ctx.cache,
+            client=ctx.client,
+            fetcher=ctx.fetcher,
+            budget=budget,
+            deadline=deadline,
+            cache_ttl_s=ctx.calendar.ttl_seconds(),
+            refresh=refresh,
+            discover_meetings=discover_meetings,
+        )
+    except Exception as exc:  # noqa: BLE001 - never fail an otherwise-good response
+        logger.warning("URL hygiene skipped: %s", safe_exception_summary(exc))
+        return content
+
+
+def _memoized_meeting_discoverer(
+    ctx: ServerContext,
+    deadline: float | None,
+) -> Callable[[], list[str]]:
+    """Return a per-tool-call meeting discoverer that runs at most once."""
+    state: dict[str, list[str]] = {}
+
+    def discover() -> list[str]:
+        if "meetings" not in state:
+            state["meetings"] = _discover_meetings(ctx, deadline=deadline)
+        return state["meetings"]
+
+    return discover
+
+
 def _outlinks_cache_key(title: str) -> str:
-    """Return the cache key for a meeting page's outlink index."""
-    return f"{title}{_OUTLINKS_KEY_SEP}"
+    """Return the cache key for a meeting page's outlink index (owned by ``cache``)."""
+    return outlinks_key(title)
 
 
 def _page_outlinks(
@@ -193,13 +250,12 @@ def _cached_page_outlinks(
 def _lookup_namespace_name(ctx: ServerContext, namespace_id: int) -> str | None:
     """Resolve a namespace id to its API-provided display name, if known."""
     try:
-        resp = ctx.client.list_namespaces()
+        namespaces = ctx.client.list_namespaces()
     except Exception:  # noqa: BLE001 - optional enrichment; list_pages must not fail
         return None
-    for ns_id_str, ns in resp.get("query", {}).get("namespaces", {}).items():
-        if int(ns_id_str) == namespace_id:
-            name = ns.get("*")
-            return name if name is not None else None
+    for ns in namespaces:
+        if ns.id == namespace_id:
+            return ns.name
     return None
 
 
@@ -217,27 +273,40 @@ def search_wiki(
 ) -> SearchResults:
     """Search the wiki's full text via CirrusSearch.
 
-    Snippets are API-generated excerpts, not authoritative text; use ``get_page``
-    for verbatim content.
+    Snippets are API-generated excerpts with CirrusSearch highlight spans
+    stripped; they are not authoritative — use ``get_page`` for authoritative
+    text.
     """
     limit = _clamp(limit, 1, _MAX_LIST_LIMIT)
     offset = cursor_offset(cursor)
-    resp = ctx.client.search(query, limit=limit, namespace=namespace, offset=offset)
-    search = resp.get("query", {}).get("search", [])
-    hits = [
-        SearchHit(
-            title=item["title"],
-            namespace=item.get("ns", 0),
-            size=item.get("size"),
-            wordcount=item.get("wordcount"),
-            timestamp=item.get("timestamp"),
-            snippet=item.get("snippet") if include_snippet else None,
-            url=ctx.client.canonical_url(item["title"]),
+    page = ctx.client.search(query, limit=limit, namespace=namespace, offset=offset)
+    deadline = composite_deadline(DEFAULT_COMPOSITE_MAX_WAIT_S)
+    budget = HygieneBudget()
+    discover_meetings = _memoized_meeting_discoverer(ctx, deadline)
+    hits = []
+    for item in page.results:
+        snippet = item.snippet if include_snippet else None
+        if snippet is not None:
+            snippet = strip_cirrus_highlight_markup(snippet)
+            snippet = _sanitize_client_content(
+                ctx,
+                snippet,
+                deadline=deadline,
+                budget=budget,
+                discover_meetings=discover_meetings,
+            )
+        hits.append(
+            SearchHit(
+                title=item.title,
+                namespace=item.namespace,
+                size=item.size,
+                wordcount=item.wordcount,
+                timestamp=item.timestamp,
+                snippet=snippet,
+                url=ctx.client.canonical_url(item.title),
+            )
         )
-        for item in search
-    ]
-    next_offset = resp.get("continue", {}).get("sroffset")
-    next_cursor = encode_cursor({"o": next_offset}) if next_offset is not None else None
+    next_cursor = encode_cursor({"o": page.next_offset}) if page.next_offset is not None else None
     return SearchResults(query=query, hits=hits, include_snippet=include_snippet, next_cursor=next_cursor)
 
 
@@ -254,13 +323,15 @@ def get_page(
     refresh: bool = False,
     max_wait_s: float | None = None,
 ) -> PageContent:
-    """Return verbatim wikitext for a page (or one section), chunked if large.
+    """Return a page's wikitext (or one section), chunked if large.
+
+    Legacy ``wiki.edg.com`` links are rewritten or annotated before the response.
 
     Raises:
         PageNotFound: if the page does not exist.
     """
     max_bytes = _clamp(max_bytes, 1024, 256 * 1024)
-    start = cursor_offset(cursor)
+    deadline = composite_deadline(max_wait_s if max_wait_s is not None else DEFAULT_COMPOSITE_MAX_WAIT_S)
 
     if section is not None:
         outcome = ctx.fetcher.get_page_section(
@@ -281,10 +352,19 @@ def get_page(
             raise PageNotFound(f"Page or section not found: {title!r} section {section}")
         raise PageNotFound(f"Page not found: {title!r}")
     prov = ctx.provenance(outcome)
-    content = outcome.content
+    content = _sanitize_client_content(
+        ctx,
+        outcome.content,
+        deadline=deadline,
+        budget=HygieneBudget(),
+        refresh=refresh,
+        discover_meetings=_memoized_meeting_discoverer(ctx, deadline),
+    )
 
+    total_bytes = len(content.encode("utf-8"))
+    start = page_chunk_offset(cursor, revid=prov.revid, total_bytes=total_bytes)
     chunk_text, byte_start, byte_end, total, has_more = chunk_utf8(content, start=start, max_bytes=max_bytes)
-    next_cursor = encode_cursor({"o": byte_end}) if has_more else None
+    next_cursor = encode_page_chunk_cursor(byte_end, revid=prov.revid, total_bytes=total) if has_more else None
     return PageContent(
         provenance=prov,
         section=section,
@@ -313,13 +393,9 @@ def list_pages(
     """Enumerate page titles in a namespace (API-provided; no content)."""
     limit = _clamp(limit, 1, _MAX_NS_PAGE_LIMIT)
     cont = decode_cursor(cursor).get("c")
-    resp = ctx.client.list_pages(namespace=namespace, prefix=prefix, limit=limit, cont=cont)
-    pages = [
-        PageRef(title=p["title"], namespace=p.get("ns", namespace), url=ctx.client.canonical_url(p["title"]))
-        for p in resp.get("query", {}).get("allpages", [])
-    ]
-    next_cont = resp.get("continue", {}).get("apcontinue")
-    next_cursor = encode_cursor({"c": next_cont}) if next_cont is not None else None
+    page = ctx.client.list_pages(namespace=namespace, prefix=prefix, limit=limit, cont=cont)
+    pages = [PageRef(title=p.title, namespace=p.namespace, url=ctx.client.canonical_url(p.title)) for p in page.items]
+    next_cursor = encode_cursor({"c": page.next_cont}) if page.next_cont is not None else None
     return PageList(
         namespace_id=namespace,
         namespace_name=_lookup_namespace_name(ctx, namespace),
@@ -333,29 +409,28 @@ def list_pages(
 # --------------------------------------------------------------------------- #
 def list_namespaces(ctx: ServerContext) -> list[NamespaceInfo]:
     """List all content namespaces (API-provided)."""
-    resp = ctx.client.list_namespaces()
     out: list[NamespaceInfo] = []
-    for ns_id_str, ns in resp.get("query", {}).get("namespaces", {}).items():
-        ns_id = int(ns_id_str)
-        if ns_id < 0:
+    for ns in ctx.client.list_namespaces():
+        if ns.id < 0:
             continue
-        out.append(NamespaceInfo(id=ns_id, name=ns.get("*") or "", canonical=ns.get("canonical")))
+        out.append(NamespaceInfo(id=ns.id, name=ns.name, canonical=ns.canonical))
     return out
 
 
 # --------------------------------------------------------------------------- #
 # meeting discovery
 # --------------------------------------------------------------------------- #
-def _discover_meetings(ctx: ServerContext) -> list[str]:
+def _discover_meetings(ctx: ServerContext, *, deadline: float | None = None) -> list[str]:
     """All ns0 titles that look like meetings (``YYYY-MM Location``), newest first."""
     titles: list[str] = []
     cont: str | None = None
     while True:
-        resp = ctx.client.list_pages(namespace=0, prefix=None, limit=_MAX_NS_PAGE_LIMIT, cont=cont)
-        for page in resp.get("query", {}).get("allpages", []):
-            if _MEETING_TITLE_RE.match(page["title"]):
-                titles.append(page["title"])
-        cont = resp.get("continue", {}).get("apcontinue")
+        _remaining(deadline)
+        page = ctx.client.list_pages(namespace=0, prefix=None, limit=_MAX_NS_PAGE_LIMIT, cont=cont)
+        for item in page.items:
+            if _MEETING_TITLE_RE.match(item.title):
+                titles.append(item.title)
+        cont = page.next_cont
         if not cont:
             break
     return sorted(set(titles), reverse=True)
@@ -420,22 +495,34 @@ def get_recent_changes(
     """Recent edits/new pages (API-provided); high value during meetings."""
     limit = _clamp(limit, 1, _MAX_LIST_LIMIT)
     cont = decode_cursor(cursor).get("c")
-    resp = ctx.client.recent_changes(namespace=namespace, since=since, limit=limit, cont=cont)
-    changes = [
-        RecentChange(
-            type=c.get("type", "edit"),
-            title=c["title"],
-            revid=c.get("revid"),
-            old_revid=c.get("old_revid"),
-            timestamp=c.get("timestamp"),
-            user=c.get("user"),
-            comment=c.get("comment"),
-            url=ctx.client.canonical_url(c["title"]),
+    page = ctx.client.recent_changes(namespace=namespace, since=since, limit=limit, cont=cont)
+    deadline = composite_deadline(DEFAULT_COMPOSITE_MAX_WAIT_S)
+    budget = HygieneBudget()
+    discover_meetings = _memoized_meeting_discoverer(ctx, deadline)
+    changes = []
+    for c in page.items:
+        comment = c.comment
+        if comment is not None:
+            comment = _sanitize_client_content(
+                ctx,
+                comment,
+                deadline=deadline,
+                budget=budget,
+                discover_meetings=discover_meetings,
+            )
+        changes.append(
+            RecentChange(
+                type=c.type,
+                title=c.title,
+                revid=c.revid,
+                old_revid=c.old_revid,
+                timestamp=c.timestamp,
+                user=c.user,
+                comment=comment,
+                url=ctx.client.canonical_url(c.title),
+            )
         )
-        for c in resp.get("query", {}).get("recentchanges", [])
-    ]
-    next_cont = resp.get("continue", {}).get("rccontinue")
-    next_cursor = encode_cursor({"c": next_cont}) if next_cont is not None else None
+    next_cursor = encode_cursor({"c": page.next_cont}) if page.next_cont is not None else None
     return RecentChanges(changes=changes, next_cursor=next_cursor)
 
 
@@ -443,7 +530,7 @@ def get_recent_changes(
 # get_meeting_overview
 # --------------------------------------------------------------------------- #
 def get_meeting_overview(ctx: ServerContext, meeting: str | None = None) -> MeetingOverview:
-    """Return a meeting's landing page (verbatim) plus its deterministic outlink index."""
+    """Return a meeting's landing page plus its deterministic outlink index."""
     deadline = composite_deadline(DEFAULT_COMPOSITE_MAX_WAIT_S)
     title = _resolve_meeting(ctx, meeting)
     home = get_page(ctx, title, max_wait_s=_remaining(deadline))
@@ -470,12 +557,14 @@ def get_meeting_sessions(
 
     The server does NOT compose a schedule (room/day tables are not reliably
     parseable). It returns deterministic ``iso_slots`` (agenda time boundaries,
-    when present) plus the relevant pages verbatim; the calling LLM composes.
+    when present) plus the relevant pages; the calling LLM composes.
     """
     title = _resolve_meeting(ctx, meeting)
     max_page_bytes = _clamp(max_page_bytes, 512, 64 * 1024)
     group_tokens = [g.lower() for g in (groups or [])]
     deadline = composite_deadline(DEFAULT_COMPOSITE_MAX_WAIT_S)
+    budget = HygieneBudget()
+    discover_meetings = _memoized_meeting_discoverer(ctx, deadline)
 
     candidates = [t for t in _cached_page_outlinks(ctx, title, deadline=deadline) if t.startswith(title)]
     fetched = (
@@ -506,14 +595,24 @@ def get_meeting_sessions(
         role = "agenda" if is_agenda else ("working_group" if matched_group else "other")
 
         include_body = include_wikitext and (is_agenda or matched_group)
-        body, body_cursor, truncated = _bundle_body(content, include_body, max_page_bytes)
+        if include_body:
+            sanitized = _sanitize_client_content(
+                ctx,
+                content,
+                deadline=deadline,
+                budget=budget,
+                discover_meetings=discover_meetings,
+            )
+        else:
+            sanitized = content
+        body, body_cursor, truncated, body_total = _bundle_body(sanitized, include_body, max_page_bytes)
         pages.append(
             BundledPage(
                 title=outcome.title,
                 role=role,  # type: ignore[arg-type]
                 provenance=ctx.provenance(outcome),
                 wikitext=body,
-                size_bytes=outcome.size or len(content.encode("utf-8")),
+                size_bytes=body_total if include_body else (outcome.size or len(content.encode("utf-8"))),
                 truncated=truncated,
                 next_cursor=body_cursor,
             )
@@ -528,12 +627,12 @@ def get_meeting_sessions(
     )
 
 
-def _bundle_body(content: str, include: bool, max_bytes: int) -> tuple[str | None, str | None, bool]:
+def _bundle_body(content: str, include: bool, max_bytes: int) -> tuple[str | None, str | None, bool, int]:
     if not include:
-        return None, None, False
+        return None, None, False, 0
     chunk, _start, end, total, has_more = chunk_utf8(content, start=0, max_bytes=max_bytes)
     cursor = encode_cursor({"o": end}) if has_more else None
-    return chunk, cursor, has_more
+    return chunk, cursor, has_more, total
 
 
 # --------------------------------------------------------------------------- #

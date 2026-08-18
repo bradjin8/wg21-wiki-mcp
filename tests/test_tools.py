@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import logging
 import time
+from unittest.mock import patch
 
 import pytest
 from conftest import FakeCalendar, FakePage
+from mcp.shared.exceptions import McpError
 
 from wg21_wiki_mcp import tools
 from wg21_wiki_mcp.models import FetchError, PageNotFound
+from wg21_wiki_mcp.pagination import encode_page_chunk_cursor
+from wg21_wiki_mcp.url_hygiene import MAX_EDG_PROBES_PER_RESPONSE, HygieneBudget, ProbeOutcome, ProbeResult
 
 
 def _stale_outlink_fetched_at(ctx, *, extra_seconds: int = 3600) -> str:
@@ -70,6 +74,46 @@ def test_search_include_snippet_returns_api_excerpt(fake_client, make_ctx):
     assert res.include_snippet is True
 
 
+def test_search_snippet_rewrites_legacy_edg_urls(fake_client, make_ctx):
+    edg = "https://wiki.edg.com/bin/view/Wg21kona2025/US207"
+    fake_client.search_results = [
+        {"title": "Topic A", "ns": 0, "snippet": f"see {edg}"},
+    ]
+    fake_client.pages["2025-11 Kona:US207"] = FakePage("minutes", 1)
+    fake_client.allpages = [{"title": "2025-11 Kona", "ns": 0}]
+    ctx = make_ctx(fake_client)
+    res = tools.search_wiki(ctx, "topic", limit=5, include_snippet=True)
+    assert edg not in res.hits[0].snippet
+    assert "2025-11_Kona:US207" in res.hits[0].snippet
+
+
+def test_search_snippet_with_highlight_markup_inside_url(fake_client, make_ctx):
+    # CirrusSearch may wrap a matched term inside the URL itself. Markup is stripped
+    # before extraction so the full legacy URL is rewritten, not truncated at '<'.
+    marked = 'https://wiki.edg.com/bin/view/Wg21kona2025/<span class="searchmatch">US207</span>'
+    fake_client.search_results = [{"title": "Topic A", "ns": 0, "snippet": f"see {marked}"}]
+    fake_client.pages["2025-11 Kona:US207"] = FakePage("minutes", 1)
+    fake_client.allpages = [{"title": "2025-11 Kona", "ns": 0}]
+    ctx = make_ctx(fake_client)
+    edg = "https://wiki.edg.com/bin/view/Wg21kona2025/US207"
+    res = tools.search_wiki(ctx, "topic", limit=5, include_snippet=True)
+    assert edg not in res.hits[0].snippet
+    assert "2025-11_Kona:US207" in res.hits[0].snippet
+
+
+def test_search_snippet_probe_budget_shared_across_hits(fake_client, make_ctx):
+    edg = "https://wiki.edg.com/bin/view/Wg21unk{i}2025/P{i}"
+    fake_client.search_results = [{"title": f"T{i}", "ns": 0, "snippet": f"see {edg.format(i=i)}"} for i in range(12)]
+    ctx = make_ctx(fake_client)
+    with patch(
+        "wg21_wiki_mcp.url_hygiene._probe_edg_stub",
+        return_value=ProbeResult(ProbeOutcome.NO_SUCCESSOR),
+    ) as mock_probe:
+        res = tools.search_wiki(ctx, "topic", limit=12, include_snippet=True)
+    assert len(res.hits) == 12
+    assert mock_probe.call_count == MAX_EDG_PROBES_PER_RESPONSE
+
+
 def test_search_pagination_cursor(fake_client, make_ctx):
     fake_client.search_results = [{"title": f"T{i}", "ns": 0} for i in range(7)]
     ctx = make_ctx(fake_client)
@@ -91,6 +135,17 @@ def test_get_page_verbatim_and_provenance(fake_client, make_ctx):
     assert page.chunk.has_more is False
 
 
+def test_get_page_rewrites_legacy_edg_urls(fake_client, make_ctx):
+    edg = "https://wiki.edg.com/bin/view/Wg21kona2025/US207"
+    fake_client.pages["LEWG"] = FakePage(f"see {edg}", 1)
+    fake_client.pages["2025-11 Kona:US207"] = FakePage("minutes", 2)
+    fake_client.allpages = [{"title": "2025-11 Kona", "ns": 0}]
+    ctx = make_ctx(fake_client)
+    page = tools.get_page(ctx, "LEWG")
+    assert edg not in page.content
+    assert "2025-11_Kona:US207" in page.content
+
+
 def test_get_page_fidelity_across_chunks(fake_client, make_ctx):
     body = "x\u00e9" * 500 + "\U0001f600" * 20
     fake_client.pages["P"] = FakePage(body, 1)
@@ -104,6 +159,43 @@ def test_get_page_fidelity_across_chunks(fake_client, make_ctx):
         if not page.chunk.has_more:
             break
     assert collected == body  # reassembled == original
+
+
+def test_get_page_rejects_stale_chunk_cursor(fake_client, make_ctx):
+    body = "x" * 5000
+    fake_client.pages["P"] = FakePage(body, 7)
+    ctx = make_ctx(fake_client)
+    first = tools.get_page(ctx, "P", max_bytes=1024)
+    stale_cursor = encode_page_chunk_cursor(first.chunk.byte_end, revid=1, total_bytes=first.chunk.total_bytes)
+    with pytest.raises(McpError):
+        tools.get_page(ctx, "P", max_bytes=1024, cursor=stale_cursor)
+
+
+def test_get_page_rejects_cursor_with_wrong_total_bytes(fake_client, make_ctx):
+    body = "x" * 5000
+    fake_client.pages["P"] = FakePage(body, 7)
+    ctx = make_ctx(fake_client)
+    first = tools.get_page(ctx, "P", max_bytes=1024)
+    # Correct revid but a total_bytes that no longer matches the sanitized body:
+    # the length-change guard, not the revid guard, must reject this.
+    bad_cursor = encode_page_chunk_cursor(
+        first.chunk.byte_end,
+        revid=first.provenance.revid,
+        total_bytes=first.chunk.total_bytes + 1,
+    )
+    with pytest.raises(McpError):
+        tools.get_page(ctx, "P", max_bytes=1024, cursor=bad_cursor)
+
+
+def test_sanitize_client_content_returns_original_on_internal_error(fake_client, make_ctx):
+    edg = "https://wiki.edg.com/bin/view/Wg21kona2025/US207"
+    ctx = make_ctx(fake_client)
+    # An unexpected internal error skips hygiene entirely: legacy links are
+    # returned unrewritten and unmarked (no '(stale URL)' marker).
+    with patch("wg21_wiki_mcp.tools.sanitize_legacy_edg_urls", side_effect=RuntimeError("boom")):
+        out = tools._sanitize_client_content(ctx, edg, deadline=1.0, budget=HygieneBudget())
+    assert out == edg
+    assert "(stale URL)" not in out
 
 
 def test_get_page_not_found(fake_client, make_ctx):
@@ -248,6 +340,24 @@ def test_recent_changes(fake_client, make_ctx):
     assert res.changes[0].title == "P1" and res.changes[0].url.endswith("title=P1")
 
 
+def test_recent_changes_comment_rewrites_legacy_edg_urls(fake_client, make_ctx):
+    edg = "https://wiki.edg.com/bin/view/Wg21kona2025/US207"
+    fake_client.recent = [
+        {
+            "type": "edit",
+            "title": "P1",
+            "revid": 2,
+            "comment": f"link {edg}",
+        },
+    ]
+    fake_client.pages["2025-11 Kona:US207"] = FakePage("minutes", 1)
+    fake_client.allpages = [{"title": "2025-11 Kona", "ns": 0}]
+    ctx = make_ctx(fake_client)
+    res = tools.get_recent_changes(ctx, limit=10)
+    assert edg not in res.changes[0].comment
+    assert "2025-11_Kona:US207" in res.changes[0].comment
+
+
 # --- meeting overview -----------------------------------------------------
 def test_meeting_overview(fake_client, make_ctx):
     fake_client.pages["2026-06 Alpha"] = FakePage("home body", 1)
@@ -308,6 +418,42 @@ def test_session_bundle(fake_client, make_ctx):
     assert rooms.role == "other"
     assert rooms.wikitext is None
     assert rooms.provenance.url.endswith("title=2026-06_Alpha:Rooms")
+
+
+def test_session_bundle_rewrites_legacy_edg_urls(fake_client, make_ctx):
+    edg = "https://wiki.edg.com/bin/view/Wg21kona2025/US207"
+    fake_client.pages["2026-06 Alpha"] = FakePage("home", 1)
+    fake_client.pages["2026-06 Alpha:EWG"] = FakePage(f"see {edg}", 2)
+    fake_client.pages["2025-11 Kona:US207"] = FakePage("minutes", 3)
+    fake_client.allpages = [
+        {"title": "2026-06 Alpha", "ns": 0},
+        {"title": "2025-11 Kona", "ns": 0},
+    ]
+    fake_client.links["2026-06 Alpha"] = [{"title": "2026-06 Alpha:EWG", "ns": 0}]
+    ctx = make_ctx(fake_client)
+    bundle = tools.get_meeting_sessions(ctx, groups=["EWG"])
+    ewg = next(p for p in bundle.pages if p.title == "2026-06 Alpha:EWG")
+    assert edg not in ewg.wikitext
+    assert "2025-11_Kona:US207" in ewg.wikitext
+
+
+def test_session_bundle_skips_sanitizer_when_wikitext_excluded(fake_client, make_ctx):
+    edg = "https://wiki.edg.com/bin/view/Wg21kona2025/US207"
+    fake_client.pages["2026-06 Alpha"] = FakePage("home", 1)
+    # The group match makes include_body depend solely on include_wikitext, so
+    # deleting the gate would make this test fail rather than pass vacuously.
+    fake_client.pages["2026-06 Alpha:EWG"] = FakePage(f"see {edg}", 2)
+    fake_client.allpages = [{"title": "2026-06 Alpha", "ns": 0}]
+    fake_client.links["2026-06 Alpha"] = [{"title": "2026-06 Alpha:EWG", "ns": 0}]
+    ctx = make_ctx(fake_client)
+    with patch("wg21_wiki_mcp.tools._sanitize_client_content") as mock_sanitize:
+        bundle = tools.get_meeting_sessions(ctx, groups=["EWG"], include_wikitext=False)
+        mock_sanitize.assert_not_called()
+    assert all(p.wikitext is None for p in bundle.pages)
+    # Same fixture with the body included does reach the sanitizer.
+    with patch("wg21_wiki_mcp.tools._sanitize_client_content", return_value="ok") as mock_sanitize:
+        tools.get_meeting_sessions(ctx, groups=["EWG"], include_wikitext=True)
+        mock_sanitize.assert_called_once()
 
 
 def test_session_bundle_manifest_only(fake_client, make_ctx):
