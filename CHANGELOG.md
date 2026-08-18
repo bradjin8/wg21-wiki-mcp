@@ -18,6 +18,10 @@ for the pre-1.0 API stability policy and deprecation timeline.
   keeps its URL followed by the literal marker `(stale URL)`, chosen so the annotation
   cannot open a MediaWiki link sequence inside a wikitext field. Fetch/cache wikitext
   remains byte-for-byte ([#98](https://github.com/cppalliance/wg21-wiki-mcp/issues/98)).
+- Optional tuning for legacy URL hygiene: `ISOCPP_WIKI_URL_HYGIENE_TIMEOUT_S`
+  (per-probe HTTP timeout cap, default **12** seconds) and
+  `ISOCPP_WIKI_URL_REMAP_TTL` (remap-cache TTL, default **604800** seconds /
+  one week). See [.env.example](.env.example).
 
 ### Changed
 

@@ -160,7 +160,7 @@ class MeetingList(BaseModel):
 
 
 class RecentChange(BaseModel):
-    """A single entry from the wiki's recent-changes feed (API-provided)."""
+    """A single recent-changes feed entry; edit comments may have legacy EDG URLs rewritten."""
 
     type: str
     title: str

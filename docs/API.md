@@ -24,7 +24,7 @@ Return a meeting's landing page plus its subpage outlink index.
 
 ## `get_meeting_sessions`
 
-Return raw materials to compose a meeting's schedule.
+Schedule bundle; bundled wikitext may have legacy wiki.edg.com links rewritten or marked ``(stale URL)``.
 
 | Parameter | Type | Default |
 | --- | --- | --- |
@@ -37,7 +37,7 @@ Return raw materials to compose a meeting's schedule.
 
 ## `get_page`
 
-Return wikitext for a page (or one section), with provenance; chunked if large.
+Wikitext for a page (or section); legacy wiki.edg.com links rewritten or marked ``(stale URL)``.
 
 | Parameter | Type | Default |
 | --- | --- | --- |
@@ -132,7 +132,7 @@ Structured tool outputs are Pydantic models in [models.py](../src/wg21_wiki_mcp/
 - **`PageList`** — A page of page references within a namespace, with a pagination cursor.
 - **`PageRef`** — A lightweight title + URL reference (no content).
 - **`Provenance`** — Identity and verifiable source links for a wiki page revision.
-- **`RecentChange`** — A single entry from the wiki's recent-changes feed (API-provided).
+- **`RecentChange`** — A single recent-changes feed entry; edit comments may have legacy EDG URLs rewritten.
 - **`RecentChanges`** — A page of recent-changes entries, with an optional pagination cursor.
 - **`SearchHit`** — A single CirrusSearch result. Snippet is present only when the caller opted in.
 - **`SearchResults`** — A page of search hits for a query, with an optional pagination cursor.

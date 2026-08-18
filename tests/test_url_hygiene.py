@@ -12,10 +12,14 @@ from conftest import FakePage, FakeWikiClient, make_config
 
 from wg21_wiki_mcp.cache import Cache, UrlRemap
 from wg21_wiki_mcp.fetch import PageFetcher
+from wg21_wiki_mcp.models import FetchError
 from wg21_wiki_mcp.url_hygiene import (
     MAX_EDG_PROBES_PER_RESPONSE,
+    MAX_EDG_URLS_PER_FIELD,
     STALE_URL_MARKER,
     HygieneBudget,
+    ProbeOutcome,
+    ProbeResult,
     _apply_replacements,
     _probe_edg_stub,
     _titles_exist,
@@ -26,11 +30,13 @@ from wg21_wiki_mcp.url_hygiene import (
     parse_edg_view_url,
     parse_isocpp_url_from_stub,
     sanitize_legacy_edg_urls,
+    strip_cirrus_highlight_markup,
     wiki_title_from_isocpp_url,
 )
 
 BASE = "https://wiki.example.org"
 EDG_US207 = "https://wiki.edg.com/bin/view/Wg21kona2025/US207"
+MEETING_US207 = "2025-11 Kona:US207"
 ISOCPP_US207 = f"{BASE}/index.php?title=2025-11_Kona:US207"
 WEEK_S = 7 * 24 * 60 * 60
 
@@ -62,6 +68,16 @@ def test_extract_edg_urls_strips_trailing_sentence_punctuation():
     assert extract_edg_urls(f"see {EDG_US207}...") == [EDG_US207]
 
 
+def test_extract_edg_urls_strips_template_closing_braces():
+    url = "https://wiki.edg.com/bin/view/Wg21kona2025/US207"
+    assert extract_edg_urls(f"{{{{link|{url}}}}}") == [url]
+
+
+def test_extract_edg_urls_caps_per_field():
+    urls = [f"https://wiki.edg.com/bin/view/Wg21unk{i}2025/P{i}" for i in range(MAX_EDG_URLS_PER_FIELD + 5)]
+    assert len(extract_edg_urls(" ".join(urls))) == MAX_EDG_URLS_PER_FIELD
+
+
 def test_parse_edg_view_url():
     assert parse_edg_view_url(EDG_US207) == ("Wg21kona2025", "US207")
 
@@ -75,24 +91,24 @@ def test_parse_edg_view_url_rejects_bad_hosts_and_paths():
 
 def test_parse_isocpp_url_from_stub_fallback_link():
     html = "EDG Wiki Discontinued <a href='https://wiki.isocpp.org/2025-11_Kona:P999'>x</a>"
-    assert parse_isocpp_url_from_stub(html) == "https://wiki.isocpp.org/2025-11_Kona:P999"
-    assert parse_isocpp_url_from_stub("<p>no links</p>") is None
+    assert parse_isocpp_url_from_stub(html, base_url=BASE) == "https://wiki.isocpp.org/2025-11_Kona:P999"
+    assert parse_isocpp_url_from_stub("<p>no links</p>", base_url=BASE) is None
 
 
 def test_parse_isocpp_url_from_stub_ignores_distant_and_decoy_links():
     # A nav link ahead of the notice must not win over the labelled target.
     decoy = '<a href="https://wiki.isocpp.org/Main_Page">Home</a>'
     html = f"<nav>{decoy}</nav>{EDG_STUB_HTML}"
-    assert parse_isocpp_url_from_stub(html) == "https://wiki.isocpp.org/2025-11_Kona:US207"
+    assert parse_isocpp_url_from_stub(html, base_url=BASE) == "https://wiki.isocpp.org/2025-11_Kona:US207"
 
     # Without the labelled link, only hits near the notice are trusted.
     far = "EDG Wiki Discontinued" + ("x" * 2000) + ' <a href="https://wiki.isocpp.org/Main_Page">Home</a>'
-    assert parse_isocpp_url_from_stub(far) is None
+    assert parse_isocpp_url_from_stub(far, base_url=BASE) is None
 
 
 def test_parse_isocpp_url_from_stub_allows_extra_attributes():
     html = "page now located at: <a class='ext' href='https://wiki.isocpp.org/2025-11_Kona:US207'>go</a>"
-    assert parse_isocpp_url_from_stub(html) == "https://wiki.isocpp.org/2025-11_Kona:US207"
+    assert parse_isocpp_url_from_stub(html, base_url=BASE) == "https://wiki.isocpp.org/2025-11_Kona:US207"
 
 
 def test_wiki_title_from_isocpp_url():
@@ -101,7 +117,7 @@ def test_wiki_title_from_isocpp_url():
             "https://wiki.isocpp.org/2025-11_Kona:US207",
             BASE,
         )
-        == "2025-11_Kona:US207"
+        == "2025-11 Kona:US207"
     )
     assert (
         wiki_title_from_isocpp_url(
@@ -110,7 +126,7 @@ def test_wiki_title_from_isocpp_url():
         )
         == "Foo/Bar"
     )
-    assert wiki_title_from_isocpp_url("https://evil.example/x", BASE) is None
+    assert wiki_title_from_isocpp_url("https://evil.wiki.isocpp.org/x", BASE) is None
     assert wiki_title_from_isocpp_url(f"{BASE}/index.php", BASE) is None
 
 
@@ -122,7 +138,7 @@ def test_meeting_prefix_for_edg_space_no_match():
 def test_meeting_prefix_for_edg_space_prefers_exact_location():
     # Discovery order must not decide which same-year meeting wins.
     for meetings in (["2025-11 Kona", "2025-11 Kona Workshop"], ["2025-11 Kona Workshop", "2025-11 Kona"]):
-        assert meeting_prefix_for_edg_space("Wg21kona2025", meetings) == "2025-11_Kona"
+        assert meeting_prefix_for_edg_space("Wg21kona2025", meetings) == "2025-11 Kona"
 
 
 def test_meeting_prefix_for_edg_space_ambiguous_returns_none():
@@ -135,12 +151,12 @@ def test_meeting_prefix_for_edg_space_ambiguous_returns_none():
 
 
 def test_meeting_prefix_for_edg_space_single_inexact_candidate():
-    assert meeting_prefix_for_edg_space("Wg21kona2025", ["2025-11 Kona Workshop"]) == "2025-11_Kona_Workshop"
+    assert meeting_prefix_for_edg_space("Wg21kona2025", ["2025-11 Kona Workshop"]) == "2025-11 Kona Workshop"
 
 
 def test_meeting_prefix_for_edg_space_year_filter_rejects_other_years():
     # Only the year gate separates these; without it Kona maps onto Sofia.
-    assert meeting_prefix_for_edg_space("Wg21kona2025", ["2025-06 Sofia"]) is None
+    assert meeting_prefix_for_edg_space("Wg21kona2025", ["2024-06 Sofia"]) is None
 
 
 def test_url_remap_age_seconds():
@@ -152,6 +168,9 @@ def test_url_remap_age_seconds():
     assert UrlRemap(EDG_US207, None, "not-a-date").age_seconds() == float("inf")
 
 
+_PROBE_KW = {"user_agent": "test", "base_url": BASE}
+
+
 def test_probe_edg_stub_paths():
     class Ok:
         status_code = 200
@@ -161,26 +180,27 @@ def test_probe_edg_stub_paths():
         "wg21_wiki_mcp.url_hygiene.requests.get",
         side_effect=requests.Timeout("slow"),
     ):
-        assert _probe_edg_stub(EDG_US207, user_agent="test", timeout=1.0) is None
+        assert _probe_edg_stub(EDG_US207, timeout=1.0, **_PROBE_KW).outcome is ProbeOutcome.FAILED
 
-    with patch("wg21_wiki_mcp.url_hygiene.requests.get", return_value=Ok()):
-        assert _probe_edg_stub(EDG_US207, user_agent="test", timeout=1.0) == (
-            "https://wiki.isocpp.org/2025-11_Kona:US207"
-        )
+    with patch("wg21_wiki_mcp.url_hygiene.requests.get", return_value=Ok()) as mock_get:
+        result = _probe_edg_stub(EDG_US207, timeout=1.0, **_PROBE_KW)
+        assert result.outcome is ProbeOutcome.RESOLVED
+        assert result.target == "https://wiki.isocpp.org/2025-11_Kona:US207"
+        assert mock_get.call_args.kwargs["allow_redirects"] is False
 
     class BadStatus:
         status_code = 404
         text = ""
 
     with patch("wg21_wiki_mcp.url_hygiene.requests.get", return_value=BadStatus()):
-        assert _probe_edg_stub(EDG_US207, user_agent="test", timeout=1.0) is None
+        assert _probe_edg_stub(EDG_US207, timeout=1.0, **_PROBE_KW).outcome is ProbeOutcome.NO_SUCCESSOR
 
     class NotStub:
         status_code = 200
         text = "<html>still alive</html>"
 
     with patch("wg21_wiki_mcp.url_hygiene.requests.get", return_value=NotStub()):
-        assert _probe_edg_stub(EDG_US207, user_agent="test", timeout=1.0) is None
+        assert _probe_edg_stub(EDG_US207, timeout=1.0, **_PROBE_KW).outcome is ProbeOutcome.NO_SUCCESSOR
 
     class Redirect:
         status_code = 302
@@ -190,9 +210,22 @@ def test_probe_edg_stub_paths():
         "wg21_wiki_mcp.url_hygiene.requests.get",
         side_effect=[Redirect(), Ok()],
     ):
-        assert _probe_edg_stub(EDG_US207, user_agent="test", timeout=1.0) == (
-            "https://wiki.isocpp.org/2025-11_Kona:US207"
-        )
+        result = _probe_edg_stub(EDG_US207, timeout=1.0, **_PROBE_KW)
+        assert result.outcome is ProbeOutcome.RESOLVED
+        assert result.target == "https://wiki.isocpp.org/2025-11_Kona:US207"
+
+
+def test_probe_edg_stub_upgrades_http_entry_url():
+    http_url = "http://wiki.edg.com/bin/view/Wg21kona2025/US207"
+
+    class Ok:
+        status_code = 200
+        text = EDG_STUB_HTML
+
+    with patch("wg21_wiki_mcp.url_hygiene.requests.get", return_value=Ok()) as mock_get:
+        result = _probe_edg_stub(http_url, timeout=1.0, **_PROBE_KW)
+        assert result.outcome is ProbeOutcome.RESOLVED
+        assert mock_get.call_args.args[0].startswith("https://")
 
 
 def _redirect_to(location):
@@ -214,7 +247,7 @@ def _redirect_to(location):
 )
 def test_probe_edg_stub_rejects_unsafe_redirect_without_second_request(location):
     with patch("wg21_wiki_mcp.url_hygiene.requests.get", return_value=_redirect_to(location)()) as mock_get:
-        assert _probe_edg_stub(EDG_US207, user_agent="test", timeout=1.0) is None
+        assert _probe_edg_stub(EDG_US207, timeout=1.0, **_PROBE_KW).outcome is ProbeOutcome.FAILED
         assert mock_get.call_count == 1
 
 
@@ -224,7 +257,7 @@ def test_probe_edg_stub_redirect_without_location_header():
         headers: dict[str, str] = {}
 
     with patch("wg21_wiki_mcp.url_hygiene.requests.get", return_value=NoLocation()) as mock_get:
-        assert _probe_edg_stub(EDG_US207, user_agent="test", timeout=1.0) is None
+        assert _probe_edg_stub(EDG_US207, timeout=1.0, **_PROBE_KW).outcome is ProbeOutcome.FAILED
         assert mock_get.call_count == 1
 
 
@@ -232,7 +265,7 @@ def test_probe_edg_stub_malformed_location_is_contained():
     # urljoin raises ValueError on an unparseable IPv6 literal; the probe must
     # absorb it rather than let it escape to the tool boundary.
     with patch("wg21_wiki_mcp.url_hygiene.requests.get", return_value=_redirect_to("https://[oops/x")()):
-        assert _probe_edg_stub(EDG_US207, user_agent="test", timeout=1.0) is None
+        assert _probe_edg_stub(EDG_US207, timeout=1.0, **_PROBE_KW).outcome is ProbeOutcome.FAILED
 
 
 def test_probe_edg_stub_redirect_loop_stops_early():
@@ -245,7 +278,7 @@ def test_probe_edg_stub_redirect_loop_stops_early():
         return responses[url]
 
     with patch("wg21_wiki_mcp.url_hygiene.requests.get", side_effect=fake_get) as mock_get:
-        assert _probe_edg_stub("https://wiki.edg.com/a", user_agent="test", timeout=5.0) is None
+        assert _probe_edg_stub("https://wiki.edg.com/a", timeout=5.0, **_PROBE_KW).outcome is ProbeOutcome.FAILED
         # Loop detection stops on the hop back to an already-visited URL.
         assert mock_get.call_count == 2
 
@@ -258,7 +291,7 @@ def test_probe_edg_stub_hop_exhaustion():
         return _redirect_to(f"https://wiki.isocpp.org/hop{counter['n']}")()
 
     with patch("wg21_wiki_mcp.url_hygiene.requests.get", side_effect=fake_get) as mock_get:
-        assert _probe_edg_stub(EDG_US207, user_agent="test", timeout=30.0) is None
+        assert _probe_edg_stub(EDG_US207, timeout=30.0, **_PROBE_KW).outcome is ProbeOutcome.FAILED
         assert mock_get.call_count == 11
 
 
@@ -268,7 +301,7 @@ def test_probe_edg_stub_stops_when_timeout_budget_is_spent():
         return _redirect_to("https://wiki.isocpp.org/next")()
 
     with patch("wg21_wiki_mcp.url_hygiene.requests.get", side_effect=slow_redirect) as mock_get:
-        assert _probe_edg_stub(EDG_US207, user_agent="test", timeout=0.04) is None
+        assert _probe_edg_stub(EDG_US207, timeout=0.04, **_PROBE_KW).outcome is ProbeOutcome.FAILED
         # The chain stops on the spent budget, well before the hop cap of 11.
         assert mock_get.call_count == 1
 
@@ -289,7 +322,7 @@ def test_probe_edg_stub_shares_one_timeout_budget_across_hops():
         patch("wg21_wiki_mcp.url_hygiene.time.monotonic", side_effect=fake_monotonic),
         patch("wg21_wiki_mcp.url_hygiene.requests.get", side_effect=fake_get),
     ):
-        _probe_edg_stub(EDG_US207, user_agent="test", timeout=5.0)
+        _probe_edg_stub(EDG_US207, timeout=5.0, **_PROBE_KW)
     assert seen[:3] == [5.0, 4.0, 3.0]
 
 
@@ -302,12 +335,12 @@ def test_titles_exist_empty(tmp_path):
 
 def test_titles_exist_uses_fetcher_cache(tmp_path):
     client = FakeWikiClient()
-    client.pages["2025-11_Kona:US207"] = FakePage("minutes", 1)
+    client.pages["2025-11 Kona:US207"] = FakePage("minutes", 1)
     with Cache(tmp_path / "c") as cache:
         fetcher = PageFetcher(client, cache)  # type: ignore[arg-type]
-        first = _titles_exist(fetcher, ["2025-11_Kona:US207"], ttl_seconds=WEEK_S, deadline=None)
-        second = _titles_exist(fetcher, ["2025-11_Kona:US207"], ttl_seconds=WEEK_S, deadline=None)
-    assert first == second == {"2025-11_Kona:US207": True}
+        first = _titles_exist(fetcher, ["2025-11 Kona:US207"], ttl_seconds=WEEK_S, deadline=None)
+        second = _titles_exist(fetcher, ["2025-11 Kona:US207"], ttl_seconds=WEEK_S, deadline=None)
+    assert first == second == {"2025-11 Kona:US207": True}
     # The second lookup is served from the shared cache, not a second network call.
     assert client.fetch_calls == 1
 
@@ -332,7 +365,7 @@ def test_apply_replacements_is_single_pass():
 
 def test_apply_replacements_longest_first():
     content = "prefix-aa-suffix"
-    out = _apply_replacements(content, {"prefix-a": "X", "prefix": "Y"})
+    out = _apply_replacements(content, {"prefix": "Y", "prefix-a": "X"})
     assert out == "Xa-suffix"
     assert _apply_replacements(content, {}) == content
 
@@ -342,10 +375,13 @@ def test_stale_marker_does_not_open_a_wikitext_link(tmp_path):
     client = FakeWikiClient()
     content = f"See [{EDG_US207} the minutes]"
     with Cache(config.cache_dir) as cache:
-        cache.put_url_remap(EDG_US207, None)
-        out = _sanitize(content, config=config, cache=cache, client=client)
-    assert out == f"See [{EDG_US207} {STALE_URL_MARKER} the minutes]"
+        with patch("wg21_wiki_mcp.url_hygiene._probe_edg_stub") as mock_probe:
+            cache.put_url_remap(EDG_US207, None)
+            out = _sanitize(content, config=config, cache=cache, client=client)
+        mock_probe.assert_not_called()
+    assert out == f"See [{EDG_US207} (stale URL) the minutes]"
     assert "[[" not in out
+    assert "[" not in STALE_URL_MARKER and "]" not in STALE_URL_MARKER
 
 
 def test_sanitize_returns_content_when_no_edg_urls(tmp_path):
@@ -359,15 +395,17 @@ def test_sanitize_uses_cached_stale_marker(tmp_path):
     config = make_config(tmp_path)
     client = FakeWikiClient()
     with Cache(config.cache_dir) as cache:
-        cache.put_url_remap(EDG_US207, None)
-        out = _sanitize(EDG_US207, config=config, cache=cache, client=client)
+        with patch("wg21_wiki_mcp.url_hygiene._probe_edg_stub") as mock_probe:
+            cache.put_url_remap(EDG_US207, None)
+            out = _sanitize(EDG_US207, config=config, cache=cache, client=client)
+        mock_probe.assert_not_called()
     assert out == f"{EDG_US207} {STALE_URL_MARKER}"
 
 
 def test_sanitize_negative_remap_expires_with_meeting_ttl(tmp_path):
     config = make_config(tmp_path)
     client = FakeWikiClient()
-    client.pages["2025-11_Kona:US207"] = FakePage("minutes", 1)
+    client.pages["2025-11 Kona:US207"] = FakePage("minutes", 1)
     with Cache(config.cache_dir) as cache:
         cache.put_url_remap(EDG_US207, None)
         # A one-hour meeting TTL must retire a stale verdict written a day ago.
@@ -389,7 +427,7 @@ def test_sanitize_negative_remap_expires_with_meeting_ttl(tmp_path):
 def test_sanitize_refresh_bypasses_remap_cache(tmp_path):
     config = make_config(tmp_path)
     client = FakeWikiClient()
-    client.pages["2025-11_Kona:US207"] = FakePage("minutes", 1)
+    client.pages["2025-11 Kona:US207"] = FakePage("minutes", 1)
     with Cache(config.cache_dir) as cache:
         cache.put_url_remap(EDG_US207, None)
         out = _sanitize(
@@ -407,7 +445,10 @@ def test_sanitize_heuristic_missing_page_falls_through(tmp_path):
     client = FakeWikiClient()
     config = make_config(tmp_path)
     with Cache(config.cache_dir) as cache:
-        with patch("wg21_wiki_mcp.url_hygiene._probe_edg_stub", return_value=None):
+        with patch(
+            "wg21_wiki_mcp.url_hygiene._probe_edg_stub",
+            return_value=ProbeResult(ProbeOutcome.NO_SUCCESSOR),
+        ) as mock_probe:
             out = _sanitize(
                 EDG_US207,
                 config=config,
@@ -417,6 +458,7 @@ def test_sanitize_heuristic_missing_page_falls_through(tmp_path):
             )
     assert out == f"{EDG_US207} {STALE_URL_MARKER}"
     assert client.fetch_calls >= 1
+    mock_probe.assert_called_once()
 
 
 def test_sanitize_probe_cap_marks_excess_stale(tmp_path):
@@ -425,7 +467,10 @@ def test_sanitize_probe_cap_marks_excess_stale(tmp_path):
     urls = [f"https://wiki.edg.com/bin/view/Wg21unk{i}2025/P{i}" for i in range(12)]
     body = " ".join(urls)
     with Cache(config.cache_dir) as cache:
-        with patch("wg21_wiki_mcp.url_hygiene._probe_edg_stub", return_value=None) as mock_probe:
+        with patch(
+            "wg21_wiki_mcp.url_hygiene._probe_edg_stub",
+            return_value=ProbeResult(ProbeOutcome.NO_SUCCESSOR),
+        ) as mock_probe:
             out = _sanitize(
                 body,
                 config=config,
@@ -442,7 +487,10 @@ def test_probe_budget_is_shared_across_calls(tmp_path):
     config = make_config(tmp_path)
     budget = HygieneBudget()
     with Cache(config.cache_dir) as cache:
-        with patch("wg21_wiki_mcp.url_hygiene._probe_edg_stub", return_value=None) as mock_probe:
+        with patch(
+            "wg21_wiki_mcp.url_hygiene._probe_edg_stub",
+            return_value=ProbeResult(ProbeOutcome.NO_SUCCESSOR),
+        ) as mock_probe:
             for i in range(12):
                 _sanitize(
                     f"https://wiki.edg.com/bin/view/Wg21unk{i}2025/P{i}",
@@ -460,7 +508,10 @@ def test_sanitize_stub_url_when_title_not_on_wiki(tmp_path):
     config = make_config(tmp_path)
     stub_url = "https://wiki.isocpp.org/2025-11_Kona:Ghost"
     with Cache(config.cache_dir) as cache:
-        with patch("wg21_wiki_mcp.url_hygiene._probe_edg_stub", return_value=stub_url):
+        with patch(
+            "wg21_wiki_mcp.url_hygiene._probe_edg_stub",
+            return_value=ProbeResult(ProbeOutcome.RESOLVED, stub_url),
+        ) as mock_probe:
             out = _sanitize(
                 EDG_US207,
                 config=config,
@@ -468,6 +519,7 @@ def test_sanitize_stub_url_when_title_not_on_wiki(tmp_path):
                 client=client,
                 discover_meetings=lambda: [],
             )
+        mock_probe.assert_called_once()
         assert stub_url not in out
         assert out == f"{EDG_US207} {STALE_URL_MARKER}"
         cached = cache.get_url_remap(EDG_US207)
@@ -480,12 +532,12 @@ def test_edg_url_to_wiki_title_unmapped():
 
 def test_meeting_prefix_for_edg_space():
     meetings = ["2025-11 Kona", "2024-03 Tokyo"]
-    assert meeting_prefix_for_edg_space("Wg21kona2025", meetings) == "2025-11_Kona"
+    assert meeting_prefix_for_edg_space("Wg21kona2025", meetings) == "2025-11 Kona"
 
 
 def test_edg_url_to_wiki_title():
     meetings = ["2025-11 Kona"]
-    assert edg_url_to_wiki_title(EDG_US207, meetings) == "2025-11_Kona:US207"
+    assert edg_url_to_wiki_title(EDG_US207, meetings) == "2025-11 Kona:US207"
 
 
 def test_is_edg_discontinued_html():
@@ -495,12 +547,12 @@ def test_is_edg_discontinued_html():
 
 
 def test_parse_isocpp_url_from_stub():
-    assert parse_isocpp_url_from_stub(EDG_STUB_HTML) == "https://wiki.isocpp.org/2025-11_Kona:US207"
+    assert parse_isocpp_url_from_stub(EDG_STUB_HTML, base_url=BASE) == "https://wiki.isocpp.org/2025-11_Kona:US207"
 
 
 def test_sanitize_rewrites_via_meeting_heuristic(tmp_path):
     client = FakeWikiClient()
-    client.pages["2025-11_Kona:US207"] = FakePage("minutes", 1)
+    client.pages["2025-11 Kona:US207"] = FakePage("minutes", 1)
     client.allpages = [{"title": "2025-11 Kona", "ns": 0}]
     config = make_config(tmp_path)
     with Cache(config.cache_dir) as cache:
@@ -535,7 +587,10 @@ def test_sanitize_marks_stale_when_unmapped(tmp_path):
     client = FakeWikiClient()
     config = make_config(tmp_path)
     with Cache(config.cache_dir) as cache:
-        with patch("wg21_wiki_mcp.url_hygiene._probe_edg_stub", return_value=None):
+        with patch(
+            "wg21_wiki_mcp.url_hygiene._probe_edg_stub",
+            return_value=ProbeResult(ProbeOutcome.NO_SUCCESSOR),
+        ) as mock_probe:
             out = _sanitize(
                 EDG_US207,
                 config=config,
@@ -544,11 +599,12 @@ def test_sanitize_marks_stale_when_unmapped(tmp_path):
                 discover_meetings=lambda: [],
             )
     assert out == f"{EDG_US207} {STALE_URL_MARKER}"
+    mock_probe.assert_called_once()
 
 
 def test_sanitize_probes_edg_stub_when_heuristic_fails(tmp_path):
     client = FakeWikiClient()
-    client.pages["2025-11_Kona:US207"] = FakePage("minutes", 1)
+    client.pages["2025-11 Kona:US207"] = FakePage("minutes", 1)
     config = make_config(tmp_path)
 
     class StubResponse:
@@ -576,3 +632,38 @@ def test_cache_url_remap_roundtrip(tmp_path):
         cache.put_url_remap("https://wiki.edg.com/stale", None)
         stale = cache.get_url_remap("https://wiki.edg.com/stale")
         assert stale is not None and stale.target_url is None
+
+
+def test_sanitize_budget_exhaustion_does_not_cache(tmp_path):
+    client = FakeWikiClient()
+    config = make_config(tmp_path)
+    budget = HygieneBudget(probes_remaining=0)
+    with Cache(config.cache_dir) as cache:
+        out = _sanitize(
+            EDG_US207,
+            config=config,
+            cache=cache,
+            client=client,
+            budget=budget,
+            discover_meetings=lambda: [],
+        )
+        assert out == f"{EDG_US207} {STALE_URL_MARKER}"
+        assert cache.get_url_remap(EDG_US207) is None
+
+
+def test_titles_exist_propagates_fetch_error(tmp_path):
+    client = FakeWikiClient()
+
+    class FailingFetcher(PageFetcher):
+        def get_pages(self, titles, *, ttl_seconds, refresh=False, max_wait_s=None):
+            raise FetchError("boom")
+
+    with Cache(tmp_path / "c") as cache:
+        fetcher = FailingFetcher(client, cache)  # type: ignore[arg-type]
+        with pytest.raises(FetchError):
+            _titles_exist(fetcher, ["Any"], ttl_seconds=WEEK_S, deadline=None)
+
+
+def test_strip_cirrus_highlight_markup():
+    marked = 'see <span class="searchmatch">US207</span>'
+    assert strip_cirrus_highlight_markup(marked) == "see US207"

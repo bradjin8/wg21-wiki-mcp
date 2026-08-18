@@ -161,12 +161,7 @@ def get_page(
     cursor: str | None = None,
     refresh: bool = False,
 ) -> PageContent:
-    """Return wikitext for a page (or one section), with provenance; chunked if large.
-
-    Legacy ``wiki.edg.com`` links in the returned body are rewritten to
-    ``wiki.isocpp.org`` at the tool boundary; an unresolvable link keeps its URL
-    followed by the literal marker ``(stale URL)``.
-    """
+    """Wikitext for a page (or section); legacy wiki.edg.com links rewritten or marked ``(stale URL)``."""
     return _wrap(
         tools.get_page,
         get_context(),
@@ -212,14 +207,7 @@ def get_meeting_sessions(
     include_wikitext: bool = True,
     max_page_bytes: int = tools._DEFAULT_BUNDLE_PAGE_MAX_BYTES,
 ) -> SessionBundle:
-    """Return raw materials to compose a meeting's schedule.
-
-    Deterministic agenda time slots plus relevant pages. The server does
-    not compose a schedule; the caller composes from the bundle. Bundled
-    wikitext may have legacy wiki.edg.com links rewritten at the tool boundary
-    when a page body is included, or annotated with the literal marker
-    ``(stale URL)`` when unresolvable. Defaults to the latest meeting.
-    """
+    """Schedule bundle; bundled wikitext may have legacy wiki.edg.com links rewritten or marked ``(stale URL)``."""
     return _wrap(
         tools.get_meeting_sessions,
         get_context(),

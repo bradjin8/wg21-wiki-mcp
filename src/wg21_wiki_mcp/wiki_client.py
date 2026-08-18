@@ -251,6 +251,72 @@ class FetchedPage:
     missing: bool
 
 
+@dataclass
+class SearchResult:
+    """One CirrusSearch hit (API-provided; ``snippet`` is an excerpt, not verbatim)."""
+
+    title: str
+    namespace: int
+    size: int | None
+    wordcount: int | None
+    timestamp: str | None
+    snippet: str | None
+
+
+@dataclass
+class SearchPage:
+    """A page of search hits plus the offset cursor for the next page."""
+
+    results: list[SearchResult]
+    next_offset: int | None
+
+
+@dataclass
+class PageListItem:
+    """One title from an ``allpages`` enumeration."""
+
+    title: str
+    namespace: int
+
+
+@dataclass
+class PageListPage:
+    """A page of enumerated titles plus the continuation token for the next page."""
+
+    items: list[PageListItem]
+    next_cont: str | None
+
+
+@dataclass
+class RecentChangeItem:
+    """One recent-changes entry (API-provided)."""
+
+    type: str
+    title: str
+    revid: int | None
+    old_revid: int | None
+    timestamp: str | None
+    user: str | None
+    comment: str | None
+
+
+@dataclass
+class RecentChangesPage:
+    """A page of recent changes plus the continuation token for the next page."""
+
+    items: list[RecentChangeItem]
+    next_cont: str | None
+
+
+@dataclass
+class NamespaceItem:
+    """One namespace from the wiki's ``siteinfo`` table (id may be negative)."""
+
+    id: int
+    name: str
+    canonical: str | None
+
+
 class WikiClient:
     """Thread-safe-ish authenticated MediaWiki client.
 
@@ -616,6 +682,10 @@ class WikiClient:
             result, last_exc, relogin = self._api_attempt(action, deadline=deadline, params=params)
             if result is not None:
                 return result
+            if attempt + 1 >= _MAX_RETRIES:
+                # Retries exhausted: fall through to raise without a final,
+                # never-observed backoff sleep or re-login.
+                break
             sleep_s = min(2**attempt, 30)
             if deadline is not None:
                 remaining = self._timeout_remaining(deadline)
@@ -742,8 +812,8 @@ class WikiClient:
             out.update({title: page.revid for title, page in mapped.items()})
         return out
 
-    def search(self, query: str, *, limit: int, namespace: int | None, offset: int) -> dict:
-        """Run a CirrusSearch full-text query; returns the raw API response."""
+    def search(self, query: str, *, limit: int, namespace: int | None, offset: int) -> SearchPage:
+        """Run a CirrusSearch full-text query; returns typed hits and the next offset."""
         params: dict[str, object] = {
             "list": "search",
             "srsearch": query,
@@ -753,10 +823,22 @@ class WikiClient:
         }
         if namespace is not None:
             params["srnamespace"] = namespace
-        return self.api("query", timeout=None, **params)
+        resp = self.api("query", timeout=None, **params)
+        results = [
+            SearchResult(
+                title=item["title"],
+                namespace=item.get("ns", 0),
+                size=item.get("size"),
+                wordcount=item.get("wordcount"),
+                timestamp=item.get("timestamp"),
+                snippet=item.get("snippet"),
+            )
+            for item in resp.get("query", {}).get("search", [])
+        ]
+        return SearchPage(results=results, next_offset=resp.get("continue", {}).get("sroffset"))
 
-    def list_pages(self, *, namespace: int, prefix: str | None, limit: int, cont: str | None) -> dict:
-        """Enumerate pages in a namespace via ``allpages``; returns the raw response."""
+    def list_pages(self, *, namespace: int, prefix: str | None, limit: int, cont: str | None) -> PageListPage:
+        """Enumerate pages in a namespace via ``allpages``; returns typed titles + cursor."""
         params: dict[str, object] = {
             "list": "allpages",
             "apnamespace": namespace,
@@ -766,14 +848,25 @@ class WikiClient:
             params["apprefix"] = prefix
         if cont:
             params["apcontinue"] = cont
-        return self.api("query", timeout=None, **params)
+        resp = self.api("query", timeout=None, **params)
+        items = [
+            PageListItem(title=p["title"], namespace=p.get("ns", namespace))
+            for p in resp.get("query", {}).get("allpages", [])
+        ]
+        return PageListPage(items=items, next_cont=resp.get("continue", {}).get("apcontinue"))
 
-    def list_namespaces(self) -> dict:
-        """Return the wiki's namespace table (``siteinfo``) as the raw response."""
-        return self.api("query", meta="siteinfo", siprop="namespaces")
+    def list_namespaces(self) -> list[NamespaceItem]:
+        """Return the wiki's namespace table (``siteinfo``) as typed entries."""
+        resp = self.api("query", meta="siteinfo", siprop="namespaces")
+        return [
+            NamespaceItem(id=int(ns_id_str), name=ns.get("*") or "", canonical=ns.get("canonical"))
+            for ns_id_str, ns in resp.get("query", {}).get("namespaces", {}).items()
+        ]
 
-    def recent_changes(self, *, namespace: int | None, since: str | None, limit: int, cont: str | None) -> dict:
-        """Fetch recent edits/new pages via ``recentchanges``; returns the raw response."""
+    def recent_changes(
+        self, *, namespace: int | None, since: str | None, limit: int, cont: str | None
+    ) -> RecentChangesPage:
+        """Fetch recent edits/new pages via ``recentchanges``; returns typed entries + cursor."""
         params: dict[str, object] = {
             "list": "recentchanges",
             "rclimit": limit,
@@ -786,7 +879,20 @@ class WikiClient:
             params["rcend"] = since
         if cont:
             params["rccontinue"] = cont
-        return self.api("query", timeout=None, **params)
+        resp = self.api("query", timeout=None, **params)
+        items = [
+            RecentChangeItem(
+                type=c.get("type", "edit"),
+                title=c["title"],
+                revid=c.get("revid"),
+                old_revid=c.get("old_revid"),
+                timestamp=c.get("timestamp"),
+                user=c.get("user"),
+                comment=c.get("comment"),
+            )
+            for c in resp.get("query", {}).get("recentchanges", [])
+        ]
+        return RecentChangesPage(items=items, next_cont=resp.get("continue", {}).get("rccontinue"))
 
     def page_links(self, title: str, *, limit: int, cont: str | None, timeout: float | None = None) -> dict:
         """Fetch the internal links on a page via ``prop=links``; returns the raw response."""

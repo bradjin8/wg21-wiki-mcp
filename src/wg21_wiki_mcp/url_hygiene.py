@@ -15,8 +15,9 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum, auto
 from typing import TYPE_CHECKING
-from urllib.parse import unquote, urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse, urlunparse
 
 import requests
 
@@ -32,7 +33,7 @@ if TYPE_CHECKING:
 
 logger = get_logger("url_hygiene")
 
-_EDG_URL_RE = re.compile(r"https?://wiki\.edg\.com/bin/view/[^\s\]|<>\"'*)]+", re.IGNORECASE)
+_EDG_URL_RE = re.compile(r"https?://wiki\.edg\.com/bin/view/[^\s\]|<>\"'*)}]+", re.IGNORECASE)
 # Sentence punctuation is never part of a wiki path but is routinely adjacent to
 # a URL in prose, so it must not be captured into the match.
 _URL_TRAILING_PUNCTUATION = ".,;:!?"
@@ -46,6 +47,7 @@ _EDG_SPACE_RE = re.compile(r"^Wg21(.+?)(\d{4})$", re.IGNORECASE)
 # Characters after the discontinuation notice that may still hold the migration
 # target; beyond this window a hit is navigation chrome, not the replacement.
 _STUB_FALLBACK_WINDOW = 500
+_NAV_STUB_TITLES = frozenset({"Main_Page", "Main Page"})
 
 #: Literal marker appended to legacy URLs that could not be resolved.
 STALE_URL_MARKER = "(stale URL)"
@@ -53,6 +55,30 @@ _STALE_SUFFIX = f" {STALE_URL_MARKER}"
 
 #: Probe ceiling shared by every sanitized field in one tool response.
 MAX_EDG_PROBES_PER_RESPONSE = 10
+#: Distinct legacy URLs rewritten or annotated per sanitized field.
+MAX_EDG_URLS_PER_FIELD = 50
+
+# CirrusSearch wraps matched terms in this span; strip before URL extraction.
+_CIRRUS_HIGHLIGHT_RE = re.compile(
+    r"<span\s+class=[\"']searchmatch[\"']\s*>(.*?)</span>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+class ProbeOutcome(Enum):
+    """Result of probing an EDG discontinuation stub."""
+
+    RESOLVED = auto()
+    NO_SUCCESSOR = auto()
+    FAILED = auto()
+
+
+@dataclass(frozen=True)
+class ProbeResult:
+    """Tri-state EDG stub probe result."""
+
+    outcome: ProbeOutcome
+    target: str | None = None
 
 
 @dataclass
@@ -73,6 +99,11 @@ class HygieneBudget:
         return True
 
 
+def strip_cirrus_highlight_markup(content: str) -> str:
+    """Remove CirrusSearch ``<span class="searchmatch">`` wrappers before URL extraction."""
+    return _CIRRUS_HIGHLIGHT_RE.sub(r"\1", content)
+
+
 def extract_edg_urls(content: str) -> list[str]:
     """Return unique ``wiki.edg.com`` view URLs found in ``content`` (order preserved)."""
     seen: set[str] = set()
@@ -82,7 +113,7 @@ def extract_edg_urls(content: str) -> list[str]:
         if url and url not in seen:
             seen.add(url)
             out.append(url)
-    return out
+    return out[:MAX_EDG_URLS_PER_FIELD]
 
 
 def parse_edg_view_url(url: str) -> tuple[str, str] | None:
@@ -109,25 +140,51 @@ def is_edg_discontinued_html(body: str) -> bool:
     return any(marker in body for marker in _EDG_DISCONTINUED_MARKERS)
 
 
-def parse_isocpp_url_from_stub(html: str) -> str | None:
+def _meeting_underscore_to_spaces(segment: str) -> str:
+    """Convert ``YYYY-MM_Location`` path segments to MediaWiki space-form titles."""
+    if re.fullmatch(r"\d{4}-\d{2}_.+", segment):
+        return segment[:7] + segment[7:].replace("_", " ")
+    return segment
+
+
+def _is_plausible_migration_target(url: str, base_url: str) -> bool:
+    title = wiki_title_from_isocpp_url(url, base_url)
+    if title is None:
+        return False
+    root = title.split(":", 1)[0]
+    return root not in _NAV_STUB_TITLES
+
+
+def parse_isocpp_url_from_stub(html: str, *, base_url: str) -> str | None:
     """Extract the replacement isocpp.org URL from an EDG discontinuation page."""
     match = _ISOCPP_STUB_LINK_RE.search(html)
     if match:
-        return match.group(1)
-    # Only trust a bare link when it sits next to the discontinuation notice;
+        target = match.group(1)
+        return target if _is_plausible_migration_target(target, base_url) else None
+    # Only trust a bare link when it sits next to a discontinuation notice;
     # a document-wide search would happily return a nav or footer link.
     for marker in _EDG_DISCONTINUED_MARKERS:
-        index = html.find(marker)
-        if index == -1:
-            continue
-        fallback = _ISOCPP_LINK_RE.search(html[index : index + _STUB_FALLBACK_WINDOW])
-        if fallback:
-            return fallback.group(0)
+        start = 0
+        while True:
+            index = html.find(marker, start)
+            if index == -1:
+                break
+            fallback = _ISOCPP_LINK_RE.search(html[index : index + _STUB_FALLBACK_WINDOW])
+            if fallback:
+                target = fallback.group(0)
+                if _is_plausible_migration_target(target, base_url):
+                    return target
+            start = index + 1
     return None
 
 
 def wiki_title_from_isocpp_url(url: str, base_url: str) -> str | None:
-    """Return a MediaWiki title encoded in an isocpp.org URL, if present."""
+    """Return a MediaWiki title encoded in an isocpp.org URL, if present.
+
+    Only exact host matches are accepted: the configured wiki base host and
+    ``wiki.isocpp.org``. Suffix or substring matches (e.g. ``evil.wiki.isocpp.org``)
+    are rejected.
+    """
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
     base_host = (urlparse(base_url).hostname or "").lower()
@@ -140,7 +197,12 @@ def wiki_title_from_isocpp_url(url: str, base_url: str) -> str | None:
         title = parse_qs(parsed.query).get("title", [None])[0]
         return unquote(title) if title else None
     path = unquote(parsed.path or "").lstrip("/")
-    return path if path else None
+    if not path:
+        return None
+    if ":" in path:
+        prefix, page = path.split(":", 1)
+        return f"{_meeting_underscore_to_spaces(prefix)}:{page}"
+    return _meeting_underscore_to_spaces(path)
 
 
 def meeting_prefix_for_edg_space(space: str, meeting_titles: list[str]) -> str | None:
@@ -162,9 +224,9 @@ def meeting_prefix_for_edg_space(space: str, meeting_titles: list[str]) -> str |
             continue
         location = parts[1].lower().replace("-", "").replace(" ", "")
         if location == loc_part:
-            exact.append(title.replace(" ", "_"))
+            exact.append(title)
         elif location.startswith(loc_part) or loc_part.startswith(location[:4]):
-            candidates.append(title.replace(" ", "_"))
+            candidates.append(title)
     if len(exact) == 1:
         return exact[0]
     if exact:
@@ -207,24 +269,42 @@ def _is_safe_redirect_target(url: str) -> bool:
     return port is None or port == 443
 
 
+def _https_probe_url(url: str) -> str | None:
+    """Return an https probe URL for ``wiki.edg.com``, or ``None`` if disallowed."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if host != "wiki.edg.com":
+        return None
+    if parsed.scheme == "https":
+        return url
+    if parsed.scheme == "http":
+        return urlunparse(parsed._replace(scheme="https"))
+    return None
+
+
 def _probe_edg_stub(
     url: str,
     *,
     user_agent: str,
     timeout: float,
-) -> str | None:
-    """Fetch ``url`` and return the replacement link from an EDG stub, if any.
+    base_url: str,
+) -> ProbeResult:
+    """Fetch ``url`` and classify the EDG discontinuation stub outcome.
 
     ``timeout`` bounds the whole redirect chain, not each hop.
     """
+    probe_url = _https_probe_url(url)
+    if probe_url is None:
+        return ProbeResult(ProbeOutcome.NO_SUCCESSOR)
+
     deadline = time.monotonic() + timeout
-    current_url = url
-    visited = {url}
+    current_url = probe_url
+    visited = {probe_url}
     for _ in range(_MAX_REDIRECT_HOPS + 1):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             logger.debug("EDG probe budget exhausted for %s", url)
-            return None
+            return ProbeResult(ProbeOutcome.FAILED)
         try:
             resp = requests.get(
                 current_url,
@@ -234,33 +314,36 @@ def _probe_edg_stub(
             )
         except requests.RequestException as exc:
             logger.debug("EDG probe failed for %s: %s", url, safe_exception_summary(exc))
-            return None
+            return ProbeResult(ProbeOutcome.FAILED)
         if resp.status_code in _REDIRECT_STATUSES:
             location = resp.headers.get("Location")
             if not location:
-                return None
+                return ProbeResult(ProbeOutcome.FAILED)
             try:
                 next_url = urljoin(current_url, location)
             except ValueError as exc:
                 logger.debug("EDG probe got malformed Location for %s: %s", url, safe_exception_summary(exc))
-                return None
+                return ProbeResult(ProbeOutcome.FAILED)
             if not _is_safe_redirect_target(next_url):
                 logger.debug("EDG probe blocked unsafe redirect for %s", url)
-                return None
+                return ProbeResult(ProbeOutcome.FAILED)
             if next_url in visited:
                 logger.debug("EDG probe detected redirect loop for %s", url)
-                return None
+                return ProbeResult(ProbeOutcome.FAILED)
             visited.add(next_url)
             current_url = next_url
             continue
         if resp.status_code >= 400:
-            return None
+            return ProbeResult(ProbeOutcome.NO_SUCCESSOR)
         body = resp.text
         if not is_edg_discontinued_html(body):
-            return None
-        return parse_isocpp_url_from_stub(body)
+            return ProbeResult(ProbeOutcome.NO_SUCCESSOR)
+        target = parse_isocpp_url_from_stub(body, base_url=base_url)
+        if target is None:
+            return ProbeResult(ProbeOutcome.NO_SUCCESSOR)
+        return ProbeResult(ProbeOutcome.RESOLVED, target)
     logger.debug("EDG probe exceeded redirect hops for %s", url)
-    return None
+    return ProbeResult(ProbeOutcome.FAILED)
 
 
 def _titles_exist(
@@ -356,17 +439,17 @@ def sanitize_legacy_edg_urls(
     for source in pending_probe:
         if not budget.take_probe():
             replacements[source] = _stale(source)
-            cache.put_url_remap(source, None)
             continue
         probe_timeout = http_timeout(deadline, cap=float(config.url_hygiene_timeout_s))
-        stub_target = _probe_edg_stub(
+        probe = _probe_edg_stub(
             source,
             user_agent=config.user_agent,
             timeout=probe_timeout,
+            base_url=config.base_url,
         )
         probed_target: str | None = None
-        if stub_target is not None:
-            title = wiki_title_from_isocpp_url(stub_target, config.base_url)
+        if probe.outcome is ProbeOutcome.RESOLVED and probe.target is not None:
+            title = wiki_title_from_isocpp_url(probe.target, config.base_url)
             if title is not None and _titles_exist(
                 fetcher,
                 [title],
@@ -375,6 +458,9 @@ def sanitize_legacy_edg_urls(
             ).get(title):
                 probed_target = client.canonical_url(title)
         replacements[source] = probed_target if probed_target is not None else _stale(source)
-        cache.put_url_remap(source, probed_target)
+        if probe.outcome is ProbeOutcome.RESOLVED:
+            cache.put_url_remap(source, probed_target)
+        elif probe.outcome is ProbeOutcome.NO_SUCCESSOR:
+            cache.put_url_remap(source, None)
 
     return _apply_replacements(content, replacements)

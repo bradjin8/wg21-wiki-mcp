@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 
 from filelock import FileLock, Timeout
 
-from .cache import Cache, CacheEntry, title_hash
+from .cache import Cache, CacheEntry, section_key, title_hash
 from .deadlines import PAGE_FETCH_TIMEOUT_MSG, composite_deadline, timeout_remaining
 from .locks import DEFAULT_MAX_LOCK_ENTRIES, EvictableLockMap
 from .log import get_logger
@@ -35,12 +35,6 @@ _LOCK_TIMEOUT_S = 60
 DEFAULT_COMPOSITE_MAX_WAIT_S = 30.0
 # Idle in-process lock slots are evicted once the map exceeds this size.
 _MAX_INPROC_LOCK_ENTRIES = DEFAULT_MAX_LOCK_ENTRIES
-_SECTION_KEY_SEP = "\0section="
-
-
-def section_cache_key(title: str, section: int) -> str:
-    """Return the cache/lock key for a page section (distinct from full-page keys)."""
-    return f"{title}{_SECTION_KEY_SEP}{section}"
 
 
 @dataclass(frozen=True)
@@ -91,7 +85,7 @@ class PageFetcher:
         refresh: bool = False,
     ) -> FetchOutcome:
         """Resolve one page section (cache-first, then ``rvsection`` fetch)."""
-        key = section_cache_key(title, section)
+        key = section_key(title, section)
         now = datetime.now(timezone.utc)
         entry = None if refresh else self._cache.get(key)
         if entry is not None and entry.age_seconds(now) < ttl_seconds:

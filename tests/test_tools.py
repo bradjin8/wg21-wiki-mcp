@@ -8,9 +8,12 @@ from unittest.mock import patch
 
 import pytest
 from conftest import FakeCalendar, FakePage
+from mcp.shared.exceptions import McpError
 
 from wg21_wiki_mcp import tools
 from wg21_wiki_mcp.models import FetchError, PageNotFound
+from wg21_wiki_mcp.pagination import encode_page_chunk_cursor
+from wg21_wiki_mcp.url_hygiene import MAX_EDG_PROBES_PER_RESPONSE, HygieneBudget, ProbeOutcome, ProbeResult
 
 
 def _stale_outlink_fetched_at(ctx, *, extra_seconds: int = 3600) -> str:
@@ -76,7 +79,7 @@ def test_search_snippet_rewrites_legacy_edg_urls(fake_client, make_ctx):
     fake_client.search_results = [
         {"title": "Topic A", "ns": 0, "snippet": f"see {edg}"},
     ]
-    fake_client.pages["2025-11_Kona:US207"] = FakePage("minutes", 1)
+    fake_client.pages["2025-11 Kona:US207"] = FakePage("minutes", 1)
     fake_client.allpages = [{"title": "2025-11 Kona", "ns": 0}]
     ctx = make_ctx(fake_client)
     res = tools.search_wiki(ctx, "topic", limit=5, include_snippet=True)
@@ -85,17 +88,30 @@ def test_search_snippet_rewrites_legacy_edg_urls(fake_client, make_ctx):
 
 
 def test_search_snippet_with_highlight_markup_inside_url(fake_client, make_ctx):
-    # CirrusSearch may wrap a matched term inside the URL itself. The URL regex
-    # stops at the markup, so the link is left alone rather than half-rewritten.
+    # CirrusSearch may wrap a matched term inside the URL itself. Markup is stripped
+    # before extraction so the full legacy URL is rewritten, not truncated at '<'.
     marked = 'https://wiki.edg.com/bin/view/Wg21kona2025/<span class="searchmatch">US207</span>'
     fake_client.search_results = [{"title": "Topic A", "ns": 0, "snippet": f"see {marked}"}]
-    fake_client.pages["2025-11_Kona:US207"] = FakePage("minutes", 1)
+    fake_client.pages["2025-11 Kona:US207"] = FakePage("minutes", 1)
     fake_client.allpages = [{"title": "2025-11 Kona", "ns": 0}]
     ctx = make_ctx(fake_client)
-    with patch("wg21_wiki_mcp.url_hygiene._probe_edg_stub", return_value=None):
-        res = tools.search_wiki(ctx, "topic", limit=5, include_snippet=True)
-    # Highlight markup survives intact; nothing is spliced into the middle of it.
-    assert '<span class="searchmatch">US207</span>' in res.hits[0].snippet
+    edg = "https://wiki.edg.com/bin/view/Wg21kona2025/US207"
+    res = tools.search_wiki(ctx, "topic", limit=5, include_snippet=True)
+    assert edg not in res.hits[0].snippet
+    assert "2025-11_Kona:US207" in res.hits[0].snippet
+
+
+def test_search_snippet_probe_budget_shared_across_hits(fake_client, make_ctx):
+    edg = "https://wiki.edg.com/bin/view/Wg21unk{i}2025/P{i}"
+    fake_client.search_results = [{"title": f"T{i}", "ns": 0, "snippet": f"see {edg.format(i=i)}"} for i in range(12)]
+    ctx = make_ctx(fake_client)
+    with patch(
+        "wg21_wiki_mcp.url_hygiene._probe_edg_stub",
+        return_value=ProbeResult(ProbeOutcome.NO_SUCCESSOR),
+    ) as mock_probe:
+        res = tools.search_wiki(ctx, "topic", limit=12, include_snippet=True)
+    assert len(res.hits) == 12
+    assert mock_probe.call_count == MAX_EDG_PROBES_PER_RESPONSE
 
 
 def test_search_pagination_cursor(fake_client, make_ctx):
@@ -122,7 +138,7 @@ def test_get_page_verbatim_and_provenance(fake_client, make_ctx):
 def test_get_page_rewrites_legacy_edg_urls(fake_client, make_ctx):
     edg = "https://wiki.edg.com/bin/view/Wg21kona2025/US207"
     fake_client.pages["LEWG"] = FakePage(f"see {edg}", 1)
-    fake_client.pages["2025-11_Kona:US207"] = FakePage("minutes", 2)
+    fake_client.pages["2025-11 Kona:US207"] = FakePage("minutes", 2)
     fake_client.allpages = [{"title": "2025-11 Kona", "ns": 0}]
     ctx = make_ctx(fake_client)
     page = tools.get_page(ctx, "LEWG")
@@ -143,6 +159,28 @@ def test_get_page_fidelity_across_chunks(fake_client, make_ctx):
         if not page.chunk.has_more:
             break
     assert collected == body  # reassembled == original
+
+
+def test_get_page_rejects_stale_chunk_cursor(fake_client, make_ctx):
+    body = "x" * 5000
+    fake_client.pages["P"] = FakePage(body, 7)
+    ctx = make_ctx(fake_client)
+    first = tools.get_page(ctx, "P", max_bytes=1024)
+    stale_cursor = encode_page_chunk_cursor(first.chunk.byte_end, revid=1, total_bytes=first.chunk.total_bytes)
+    with pytest.raises(McpError):
+        tools.get_page(ctx, "P", max_bytes=1024, cursor=stale_cursor)
+
+
+def test_sanitize_client_content_returns_unsanitized_on_deadline_failure(fake_client, make_ctx, monkeypatch):
+    from wg21_wiki_mcp import deadlines
+
+    edg = "https://wiki.edg.com/bin/view/Wg21kona2025/US207"
+    ctx = make_ctx(fake_client)
+    monkeypatch.setattr(
+        deadlines, "timeout_remaining", lambda _deadline, **_: (_ for _ in ()).throw(FetchError("late"))
+    )
+    out = tools._sanitize_client_content(ctx, edg, deadline=1.0, budget=HygieneBudget())
+    assert out == edg
 
 
 def test_get_page_not_found(fake_client, make_ctx):
@@ -297,7 +335,7 @@ def test_recent_changes_comment_rewrites_legacy_edg_urls(fake_client, make_ctx):
             "comment": f"link {edg}",
         },
     ]
-    fake_client.pages["2025-11_Kona:US207"] = FakePage("minutes", 1)
+    fake_client.pages["2025-11 Kona:US207"] = FakePage("minutes", 1)
     fake_client.allpages = [{"title": "2025-11 Kona", "ns": 0}]
     ctx = make_ctx(fake_client)
     res = tools.get_recent_changes(ctx, limit=10)
@@ -371,7 +409,7 @@ def test_session_bundle_rewrites_legacy_edg_urls(fake_client, make_ctx):
     edg = "https://wiki.edg.com/bin/view/Wg21kona2025/US207"
     fake_client.pages["2026-06 Alpha"] = FakePage("home", 1)
     fake_client.pages["2026-06 Alpha:EWG"] = FakePage(f"see {edg}", 2)
-    fake_client.pages["2025-11_Kona:US207"] = FakePage("minutes", 3)
+    fake_client.pages["2025-11 Kona:US207"] = FakePage("minutes", 3)
     fake_client.allpages = [
         {"title": "2026-06 Alpha", "ns": 0},
         {"title": "2025-11 Kona", "ns": 0},

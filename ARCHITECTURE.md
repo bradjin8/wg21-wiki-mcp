@@ -22,7 +22,7 @@ server.py        FastMCP server; registers tools; lifespan logs in.
   models.py      Pydantic response models; re-exports error types from errors.py.
   errors.py      Error hierarchy, documented codes, and to_mcp_error() mapping.
   pagination.py  Opaque cursors + UTF-8-safe chunking.
-  wikitext.py    Deterministic agenda time-slot extraction (the only content parse).
+  wikitext.py    Deterministic agenda time-slot extraction (does not alter returned bodies).
   url_hygiene.py Legacy wiki.edg.com URL rewrite/annotation at the tool boundary.
   config.py      Environment-driven configuration; re-exports ConfigError from errors.py.
   deprecation.py warn_deprecated() helper for future API removals.
@@ -68,9 +68,9 @@ session), transparently re-logs-in via the pinned path.
 ## Parse-vs-offload policy
 
 The server emits **structured data only when it is API-provided or mechanically
-deterministic (~100%)**; everything else is returned verbatim for the calling
-LLM to interpret. This was chosen after surveying the wiki's real formats across
-many meetings (agendas, room tables, and page roles vary widely by year).
+deterministic (~100%)**; interpretive content is returned for the calling LLM,
+with legacy ``wiki.edg.com`` link hygiene applied at the tool boundary where
+documented in the Correctness section.
 
 - Structured (safe): search results, `allpages`, namespaces, recent changes,
   page links, revision metadata. Search snippets are omitted by default; when opted in via
@@ -81,10 +81,10 @@ many meetings (agendas, room tables, and page roles vary widely by year).
   found" rather than guessing.
 - Never parsed into truth: room/day tables, composed schedules, slot<->group
   <->paper mapping, working-group and evening-session bodies. `get_meeting_sessions`
-  therefore returns a **bundle** (deterministic time slots + relevant pages
-  verbatim + provenance), and the LLM composes the schedule.
+  therefore returns a **bundle** (deterministic time slots + relevant pages with
+  optional sanitized wikitext + provenance), and the LLM composes the schedule.
 - The one sanctioned content parser is the public meeting-calendar TTL parser,
-  because a misparse only changes cache freshness, never returned content.
+  because a misparse only changes cache freshness, never returned page bodies.
 
 ## Shared cache and TTL
 

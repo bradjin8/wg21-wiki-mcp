@@ -87,6 +87,24 @@ def title_hash(title: str) -> str:
     return hashlib.sha256(title.encode("utf-8")).hexdigest()[:16]
 
 
+# Synthetic cache/lock keys share the ``pages.requested_title`` primary-key
+# column (and the lock-path hash) with real page titles. A NUL separator is
+# illegal in MediaWiki titles, so a namespaced key can never collide with a real
+# title or with another key kind. This module owns the key space; callers must
+# derive synthetic keys through the helpers below rather than build their own.
+_SYNTHETIC_KEY_SEP = "\0"
+
+
+def section_key(title: str, section: int) -> str:
+    """Return the cache/lock key for one page section (never collides with a title)."""
+    return f"{title}{_SYNTHETIC_KEY_SEP}section={section}"
+
+
+def outlinks_key(title: str) -> str:
+    """Return the cache key for a page's outlink index (never collides with a title)."""
+    return f"{title}{_SYNTHETIC_KEY_SEP}outlinks="
+
+
 class Cache:
     """SQLite-backed page cache. Safe for concurrent processes and threads."""
 

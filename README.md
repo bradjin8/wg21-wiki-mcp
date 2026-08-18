@@ -80,7 +80,12 @@ Returned page text is verbatim wiki content except that discontinued
 meeting-session wikitext (when a body is included), optional search snippets,
 and recent-change comments. A link with no known successor keeps its original
 URL followed by the literal marker `(stale URL)`. Fetch and cache stay
-byte-for-byte; the rewrite happens only at the tool boundary.
+byte-for-byte; the rewrite happens only at the tool boundary. Resolution is
+best-effort and network-dependent: it is bounded by the per-response probe budget
+and `ISOCPP_WIKI_URL_HYGIENE_TIMEOUT_S` (default **12** seconds). A `(stale URL)`
+marker can also mean the probe budget was exhausted or hygiene was skipped after
+an internal error, not only that no successor exists. Tune remap freshness with
+`ISOCPP_WIKI_URL_REMAP_TTL` (default **604800** seconds / one week).
 
 ## Tools
 
