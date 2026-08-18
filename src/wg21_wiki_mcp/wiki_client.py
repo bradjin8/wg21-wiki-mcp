@@ -38,7 +38,10 @@ _BACKOFF_CODES = frozenset({"maxlag", "ratelimited"})
 _MAX_RETRIES = 6
 _MAX_TITLES_PER_BATCH = 50  # safe limit for accounts without apihighlimits
 _SAML_MAX_RETRIES = 2
-_TRANSIENT_HTTP_CODES = frozenset(range(500, 600))
+#: Upstream HTTP statuses that indicate a transient failure (retry, never cache
+#: as a definitive verdict). Shared with ``url_hygiene`` so the two networking
+#: call sites cannot drift apart.
+TRANSIENT_HTTP_STATUSES = frozenset(range(500, 600))
 _UNSET_TIMEOUT = object()
 
 _API_REQUEST_TIMEOUT: ContextVar[float | None] = ContextVar("_API_REQUEST_TIMEOUT", default=None)
@@ -172,7 +175,7 @@ def _saml_http_request(  # type: ignore[return]
                 url=request_url or None,
             ) from exc
 
-        if resp.status_code in _TRANSIENT_HTTP_CODES and attempt + 1 < _SAML_MAX_RETRIES:
+        if resp.status_code in TRANSIENT_HTTP_STATUSES and attempt + 1 < _SAML_MAX_RETRIES:
             _log_saml_step(
                 f"{step}_retry",
                 status=resp.status_code,

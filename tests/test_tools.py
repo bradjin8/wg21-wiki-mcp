@@ -171,16 +171,31 @@ def test_get_page_rejects_stale_chunk_cursor(fake_client, make_ctx):
         tools.get_page(ctx, "P", max_bytes=1024, cursor=stale_cursor)
 
 
-def test_sanitize_client_content_returns_unsanitized_on_deadline_failure(fake_client, make_ctx, monkeypatch):
-    from wg21_wiki_mcp import deadlines
+def test_get_page_rejects_cursor_with_wrong_total_bytes(fake_client, make_ctx):
+    body = "x" * 5000
+    fake_client.pages["P"] = FakePage(body, 7)
+    ctx = make_ctx(fake_client)
+    first = tools.get_page(ctx, "P", max_bytes=1024)
+    # Correct revid but a total_bytes that no longer matches the sanitized body:
+    # the length-change guard, not the revid guard, must reject this.
+    bad_cursor = encode_page_chunk_cursor(
+        first.chunk.byte_end,
+        revid=first.provenance.revid,
+        total_bytes=first.chunk.total_bytes + 1,
+    )
+    with pytest.raises(McpError):
+        tools.get_page(ctx, "P", max_bytes=1024, cursor=bad_cursor)
 
+
+def test_sanitize_client_content_returns_original_on_internal_error(fake_client, make_ctx):
     edg = "https://wiki.edg.com/bin/view/Wg21kona2025/US207"
     ctx = make_ctx(fake_client)
-    monkeypatch.setattr(
-        deadlines, "timeout_remaining", lambda _deadline, **_: (_ for _ in ()).throw(FetchError("late"))
-    )
-    out = tools._sanitize_client_content(ctx, edg, deadline=1.0, budget=HygieneBudget())
+    # An unexpected internal error skips hygiene entirely: legacy links are
+    # returned unrewritten and unmarked (no '(stale URL)' marker).
+    with patch("wg21_wiki_mcp.tools.sanitize_legacy_edg_urls", side_effect=RuntimeError("boom")):
+        out = tools._sanitize_client_content(ctx, edg, deadline=1.0, budget=HygieneBudget())
     assert out == edg
+    assert "(stale URL)" not in out
 
 
 def test_get_page_not_found(fake_client, make_ctx):

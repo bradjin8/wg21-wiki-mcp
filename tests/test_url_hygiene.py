@@ -228,6 +228,28 @@ def test_probe_edg_stub_upgrades_http_entry_url():
         assert mock_get.call_args.args[0].startswith("https://")
 
 
+@pytest.mark.parametrize("status", [500, 502, 503, 429])
+def test_probe_edg_stub_transient_status_is_failed_not_negative(status):
+    # A transient upstream error must not be cached as a definitive "no successor".
+    class Transient:
+        status_code = status
+        text = ""
+
+    with patch("wg21_wiki_mcp.url_hygiene.requests.get", return_value=Transient()):
+        assert _probe_edg_stub(EDG_US207, timeout=1.0, **_PROBE_KW).outcome is ProbeOutcome.FAILED
+
+
+def test_probe_edg_stub_does_not_log_page_title(caplog):
+    # SECURITY.md forbids page titles in logs; the EDG path embeds space/title.
+    with caplog.at_level("DEBUG", logger="wg21_wiki_mcp.url_hygiene"):
+        with patch("wg21_wiki_mcp.url_hygiene.requests.get", side_effect=requests.Timeout("slow")):
+            result = _probe_edg_stub(EDG_US207, timeout=1.0, **_PROBE_KW)
+    assert result.outcome is ProbeOutcome.FAILED
+    assert "US207" not in caplog.text
+    assert "Wg21kona2025" not in caplog.text
+    assert "/bin/view/" not in caplog.text
+
+
 def _redirect_to(location):
     class Redirect:
         status_code = 302
@@ -632,6 +654,58 @@ def test_cache_url_remap_roundtrip(tmp_path):
         cache.put_url_remap("https://wiki.edg.com/stale", None)
         stale = cache.get_url_remap("https://wiki.edg.com/stale")
         assert stale is not None and stale.target_url is None
+
+
+def test_sanitize_threads_deadline_into_probe_timeout(tmp_path):
+    from wg21_wiki_mcp.deadlines import composite_deadline
+
+    client = FakeWikiClient()
+    config = make_config(tmp_path)
+    captured: dict[str, float] = {}
+
+    def fake_probe(url, *, user_agent, timeout, base_url):
+        captured["timeout"] = timeout
+        return ProbeResult(ProbeOutcome.NO_SUCCESSOR)
+
+    deadline = composite_deadline(1.0)
+    with Cache(config.cache_dir) as cache:
+        with patch("wg21_wiki_mcp.url_hygiene._probe_edg_stub", side_effect=fake_probe):
+            _sanitize(
+                EDG_US207,
+                config=config,
+                cache=cache,
+                client=client,
+                deadline=deadline,
+                discover_meetings=lambda: [],
+            )
+    # Derived from the ~1s remaining budget, not the multi-second configured cap.
+    assert captured["timeout"] <= 1.0
+    assert captured["timeout"] < float(config.url_hygiene_timeout_s)
+
+
+def test_sanitize_deadline_exhaustion_keeps_resolved_replacements(tmp_path):
+    from wg21_wiki_mcp.deadlines import composite_deadline
+
+    edg_b = "https://wiki.edg.com/bin/view/Wg21kona2025/US999"
+    client = FakeWikiClient()
+    config = make_config(tmp_path)
+    # Already-exhausted deadline: the first probe's http_timeout raises FetchError.
+    deadline = composite_deadline(-1.0)
+    with Cache(config.cache_dir) as cache:
+        cache.put_url_remap(EDG_US207, ISOCPP_US207)  # resolvable from cache, no probe
+        out = _sanitize(
+            f"see {EDG_US207} and {edg_b}",
+            config=config,
+            cache=cache,
+            client=client,
+            deadline=deadline,
+            discover_meetings=lambda: [],
+        )
+        # The cache-resolved replacement survives; the unprobed source is marked
+        # stale for this response only and no negative verdict is cached.
+        assert ISOCPP_US207 in out
+        assert f"{edg_b} {STALE_URL_MARKER}" in out
+        assert cache.get_url_remap(edg_b) is None
 
 
 def test_sanitize_budget_exhaustion_does_not_cache(tmp_path):

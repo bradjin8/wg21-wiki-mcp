@@ -273,8 +273,9 @@ def search_wiki(
 ) -> SearchResults:
     """Search the wiki's full text via CirrusSearch.
 
-    Snippets are API-generated excerpts, not authoritative text; use ``get_page``
-    for verbatim content.
+    Snippets are API-generated excerpts with CirrusSearch highlight spans
+    stripped; they are not authoritative — use ``get_page`` for authoritative
+    text.
     """
     limit = _clamp(limit, 1, _MAX_LIST_LIMIT)
     offset = cursor_offset(cursor)

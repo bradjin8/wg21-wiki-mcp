@@ -21,11 +21,13 @@ from urllib.parse import unquote, urljoin, urlparse, urlunparse
 
 import requests
 
-from .cache import Cache
+from .cache import Cache, title_hash
 from .config import Config
 from .deadlines import http_timeout, timeout_remaining
 from .log import get_logger
 from .log_safety import safe_exception_summary
+from .models import FetchError
+from .wiki_client import TRANSIENT_HTTP_STATUSES
 
 if TYPE_CHECKING:
     from .fetch import PageFetcher
@@ -251,6 +253,14 @@ def edg_url_to_wiki_title(url: str, meeting_titles: list[str]) -> str | None:
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _MAX_REDIRECT_HOPS = 10
 _ALLOWED_REDIRECT_HOSTS = frozenset({"wiki.edg.com", "wiki.isocpp.org"})
+# Rate limiting is a transient upstream state, not a definitive "no successor".
+_RATE_LIMITED_STATUS = 429
+
+
+def _safe_url_log_id(url: str) -> str:
+    """Content-free identifier for logs: the EDG path can embed a page title."""
+    host = (urlparse(url).hostname or "?").lower()
+    return f"{host}#{title_hash(url)}"
 
 
 def _is_safe_redirect_target(url: str) -> bool:
@@ -300,10 +310,11 @@ def _probe_edg_stub(
     deadline = time.monotonic() + timeout
     current_url = probe_url
     visited = {probe_url}
+    log_id = _safe_url_log_id(url)
     for _ in range(_MAX_REDIRECT_HOPS + 1):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            logger.debug("EDG probe budget exhausted for %s", url)
+            logger.debug("EDG probe budget exhausted for %s", log_id)
             return ProbeResult(ProbeOutcome.FAILED)
         try:
             resp = requests.get(
@@ -313,7 +324,7 @@ def _probe_edg_stub(
                 allow_redirects=False,
             )
         except requests.RequestException as exc:
-            logger.debug("EDG probe failed for %s: %s", url, safe_exception_summary(exc))
+            logger.debug("EDG probe failed for %s: %s", log_id, safe_exception_summary(exc))
             return ProbeResult(ProbeOutcome.FAILED)
         if resp.status_code in _REDIRECT_STATUSES:
             location = resp.headers.get("Location")
@@ -322,17 +333,21 @@ def _probe_edg_stub(
             try:
                 next_url = urljoin(current_url, location)
             except ValueError as exc:
-                logger.debug("EDG probe got malformed Location for %s: %s", url, safe_exception_summary(exc))
+                logger.debug("EDG probe got malformed Location for %s: %s", log_id, safe_exception_summary(exc))
                 return ProbeResult(ProbeOutcome.FAILED)
             if not _is_safe_redirect_target(next_url):
-                logger.debug("EDG probe blocked unsafe redirect for %s", url)
+                logger.debug("EDG probe blocked unsafe redirect for %s", log_id)
                 return ProbeResult(ProbeOutcome.FAILED)
             if next_url in visited:
-                logger.debug("EDG probe detected redirect loop for %s", url)
+                logger.debug("EDG probe detected redirect loop for %s", log_id)
                 return ProbeResult(ProbeOutcome.FAILED)
             visited.add(next_url)
             current_url = next_url
             continue
+        # A transient upstream error (5xx / 429) must not be cached as a
+        # definitive "no successor"; only a definitive 4xx is a real negative.
+        if resp.status_code == _RATE_LIMITED_STATUS or resp.status_code in TRANSIENT_HTTP_STATUSES:
+            return ProbeResult(ProbeOutcome.FAILED)
         if resp.status_code >= 400:
             return ProbeResult(ProbeOutcome.NO_SUCCESSOR)
         body = resp.text
@@ -342,7 +357,7 @@ def _probe_edg_stub(
         if target is None:
             return ProbeResult(ProbeOutcome.NO_SUCCESSOR)
         return ProbeResult(ProbeOutcome.RESOLVED, target)
-    logger.debug("EDG probe exceeded redirect hops for %s", url)
+    logger.debug("EDG probe exceeded redirect hops for %s", log_id)
     return ProbeResult(ProbeOutcome.FAILED)
 
 
@@ -436,27 +451,36 @@ def sanitize_legacy_edg_urls(
             else:
                 pending_probe.append(source)
 
-    for source in pending_probe:
+    for index, source in enumerate(pending_probe):
         if not budget.take_probe():
             replacements[source] = _stale(source)
             continue
-        probe_timeout = http_timeout(deadline, cap=float(config.url_hygiene_timeout_s))
-        probe = _probe_edg_stub(
-            source,
-            user_agent=config.user_agent,
-            timeout=probe_timeout,
-            base_url=config.base_url,
-        )
-        probed_target: str | None = None
-        if probe.outcome is ProbeOutcome.RESOLVED and probe.target is not None:
-            title = wiki_title_from_isocpp_url(probe.target, config.base_url)
-            if title is not None and _titles_exist(
-                fetcher,
-                [title],
-                ttl_seconds=cache_ttl_s,
-                deadline=deadline,
-            ).get(title):
-                probed_target = client.canonical_url(title)
+        try:
+            probe_timeout = http_timeout(deadline, cap=float(config.url_hygiene_timeout_s))
+            probe = _probe_edg_stub(
+                source,
+                user_agent=config.user_agent,
+                timeout=probe_timeout,
+                base_url=config.base_url,
+            )
+            probed_target: str | None = None
+            if probe.outcome is ProbeOutcome.RESOLVED and probe.target is not None:
+                title = wiki_title_from_isocpp_url(probe.target, config.base_url)
+                if title is not None and _titles_exist(
+                    fetcher,
+                    [title],
+                    ttl_seconds=cache_ttl_s,
+                    deadline=deadline,
+                ).get(title):
+                    probed_target = client.canonical_url(title)
+        except FetchError:
+            # Deadline exhausted mid-loop: mark this source and every remaining
+            # one stale for this response without caching (the verdict is
+            # "unknown", not "no successor") and keep replacements already
+            # resolved instead of discarding the whole response.
+            for remaining in pending_probe[index:]:
+                replacements[remaining] = _stale(remaining)
+            break
         replacements[source] = probed_target if probed_target is not None else _stale(source)
         if probe.outcome is ProbeOutcome.RESOLVED:
             cache.put_url_remap(source, probed_target)

@@ -96,9 +96,10 @@ class SearchHit(BaseModel):
     snippet: str | None = Field(
         default=None,
         description=(
-            "API-generated excerpt when opted in; legacy wiki.edg.com links are "
-            "rewritten at the tool boundary, or kept and followed by the literal "
-            "marker '(stale URL)' when unresolvable."
+            "API-generated excerpt when opted in, with CirrusSearch highlight "
+            "spans stripped; legacy wiki.edg.com links are rewritten at the tool "
+            "boundary, or kept and followed by the literal marker '(stale URL)' "
+            "when unresolvable."
         ),
     )
     url: str

@@ -118,8 +118,9 @@ mcp = FastMCP(
         "embedded in wikitext, search snippets, or edit comments are rewritten to "
         "wiki.isocpp.org (or annotated with the literal marker '(stale URL)') "
         "before the response is returned. Search snippets are API-generated "
-        "excerpts (truncated, reformatted, with highlight markup) and must not be "
-        "cited as verbatim wiki content — use get_page for authoritative text. The "
+        "excerpts (truncated, reformatted, CirrusSearch highlight spans stripped) "
+        "and must not be cited as verbatim wiki content — use get_page for "
+        "authoritative text. The "
         "server never composes meeting schedules — use get_meeting_sessions to get "
         "the raw materials and compose them yourself."
     ),
@@ -137,10 +138,10 @@ def search_wiki(
 ) -> SearchResults:
     """Full-text search the wiki. Returns titles and URLs.
 
-    Snippets are API-generated excerpts (truncated, reformatted, with highlight
-    markup) and must not be cited as verbatim wiki content — use ``get_page`` for
-    authoritative text. Pass ``include_snippet=True`` only when you need those
-    excerpts for disambiguation; they are omitted by default.
+    Snippets are API-generated excerpts (truncated, reformatted, CirrusSearch
+    highlight spans stripped) and must not be cited as verbatim wiki content —
+    use ``get_page`` for authoritative text. Pass ``include_snippet=True`` only
+    when you need those excerpts for disambiguation; they are omitted by default.
     """
     return _wrap(
         tools.search_wiki,
