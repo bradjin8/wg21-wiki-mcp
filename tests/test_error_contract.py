@@ -86,7 +86,12 @@ class TestBadCursorErrorShape:
         from wg21_wiki_mcp.server import _wrap
 
         with pytest.raises(MCPError) as exc_info:
-            _wrap(tools.search_wiki, make_ctx(fake_client), "topic", cursor=encode_cursor({"o": "not-an-int"}))
+            _wrap(
+                tools.search_wiki,
+                make_ctx(fake_client),
+                "topic",
+                cursor=encode_cursor({"o": "not-an-int"}, kind="search"),
+            )
         assert exc_info.value.error.code == INVALID_PARAMS
 
     def test_negative_offset_through_server_wrap(self, fake_client, make_ctx):
@@ -94,7 +99,7 @@ class TestBadCursorErrorShape:
         from wg21_wiki_mcp.server import _wrap
 
         with pytest.raises(MCPError) as exc_info:
-            _wrap(tools.list_meetings, make_ctx(fake_client), cursor=encode_cursor({"o": -5}))
+            _wrap(tools.list_meetings, make_ctx(fake_client), cursor=encode_cursor({"o": -5}, kind="meetings"))
         assert exc_info.value.error.code == INVALID_PARAMS
 
 

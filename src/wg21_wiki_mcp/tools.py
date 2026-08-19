@@ -45,6 +45,10 @@ from .models import (
     WikiStatus,
 )
 from .pagination import (
+    CURSOR_KIND_CHANGES,
+    CURSOR_KIND_MEETINGS,
+    CURSOR_KIND_PAGES,
+    CURSOR_KIND_SEARCH,
     body_digest,
     chunk_utf8,
     cursor_offset,
@@ -279,7 +283,7 @@ def search_wiki(
     text.
     """
     limit = _clamp(limit, 1, _MAX_LIST_LIMIT)
-    offset = cursor_offset(cursor)
+    offset = cursor_offset(cursor, kind=CURSOR_KIND_SEARCH)
     page = ctx.client.search(query, limit=limit, namespace=namespace, offset=offset)
     deadline = composite_deadline(DEFAULT_COMPOSITE_MAX_WAIT_S)
     budget = HygieneBudget()
@@ -307,7 +311,9 @@ def search_wiki(
                 url=ctx.client.canonical_url(item.title),
             )
         )
-    next_cursor = encode_cursor({"o": page.next_offset}) if page.next_offset is not None else None
+    next_cursor = (
+        encode_cursor({"o": page.next_offset}, kind=CURSOR_KIND_SEARCH) if page.next_offset is not None else None
+    )
     return SearchResults(query=query, hits=hits, include_snippet=include_snippet, next_cursor=next_cursor)
 
 
@@ -397,10 +403,10 @@ def list_pages(
 ) -> PageList:
     """Enumerate page titles in a namespace (API-provided; no content)."""
     limit = _clamp(limit, 1, _MAX_NS_PAGE_LIMIT)
-    cont = decode_cursor(cursor).get("c")
+    cont = decode_cursor(cursor, kind=CURSOR_KIND_PAGES).get("c")
     page = ctx.client.list_pages(namespace=namespace, prefix=prefix, limit=limit, cont=cont)
     pages = [PageRef(title=p.title, namespace=p.namespace, url=ctx.client.canonical_url(p.title)) for p in page.items]
-    next_cursor = encode_cursor({"c": page.next_cont}) if page.next_cont is not None else None
+    next_cursor = encode_cursor({"c": page.next_cont}, kind=CURSOR_KIND_PAGES) if page.next_cont is not None else None
     return PageList(
         namespace_id=namespace,
         namespace_name=_lookup_namespace_name(ctx, namespace),
@@ -465,7 +471,7 @@ def list_meetings(
     the first page when the wiki changes during pagination.
     """
     limit = _clamp(limit, 1, _MAX_LIST_LIMIT)
-    offset = cursor_offset(cursor)
+    offset = cursor_offset(cursor, kind=CURSOR_KIND_MEETINGS)
     all_meetings = _discover_meetings(ctx)
     active = all_meetings[0] if (all_meetings and ctx.calendar.is_meeting_active()) else None
     window = all_meetings[offset : offset + limit]
@@ -482,7 +488,9 @@ def list_meetings(
             )
         )
     next_offset = offset + limit
-    next_cursor = encode_cursor({"o": next_offset}) if next_offset < len(all_meetings) else None
+    next_cursor = (
+        encode_cursor({"o": next_offset}, kind=CURSOR_KIND_MEETINGS) if next_offset < len(all_meetings) else None
+    )
     return MeetingList(meetings=refs, active_meeting=active, next_cursor=next_cursor)
 
 
@@ -499,7 +507,7 @@ def get_recent_changes(
 ) -> RecentChanges:
     """Recent edits/new pages (API-provided); high value during meetings."""
     limit = _clamp(limit, 1, _MAX_LIST_LIMIT)
-    cont = decode_cursor(cursor).get("c")
+    cont = decode_cursor(cursor, kind=CURSOR_KIND_CHANGES).get("c")
     page = ctx.client.recent_changes(namespace=namespace, since=since, limit=limit, cont=cont)
     deadline = composite_deadline(DEFAULT_COMPOSITE_MAX_WAIT_S)
     budget = HygieneBudget()
@@ -527,7 +535,7 @@ def get_recent_changes(
                 url=ctx.client.canonical_url(c.title),
             )
         )
-    next_cursor = encode_cursor({"c": page.next_cont}) if page.next_cont is not None else None
+    next_cursor = encode_cursor({"c": page.next_cont}, kind=CURSOR_KIND_CHANGES) if page.next_cont is not None else None
     return RecentChanges(changes=changes, next_cursor=next_cursor)
 
 
@@ -563,6 +571,10 @@ def get_meeting_sessions(
     The server does NOT compose a schedule (room/day tables are not reliably
     parseable). It returns deterministic ``iso_slots`` (agenda time boundaries,
     when present) plus the relevant pages; the calling LLM composes.
+
+    Bundled bodies are capped at ``max_page_bytes`` and not paginated here: a page
+    whose body is cut has ``truncated=True`` and its full text is read with
+    ``get_page(title=...)``. No per-page cursor is emitted.
     """
     title = _resolve_meeting(ctx, meeting)
     max_page_bytes = _clamp(max_page_bytes, 512, 64 * 1024)
@@ -610,7 +622,7 @@ def get_meeting_sessions(
             )
         else:
             sanitized = content
-        body, body_cursor, truncated, body_total = _bundle_body(sanitized, include_body, max_page_bytes)
+        body, truncated, body_total = _bundle_body(sanitized, include_body, max_page_bytes)
         pages.append(
             BundledPage(
                 title=outcome.title,
@@ -619,7 +631,6 @@ def get_meeting_sessions(
                 wikitext=body,
                 size_bytes=body_total if include_body else (outcome.size or len(content.encode("utf-8"))),
                 truncated=truncated,
-                next_cursor=body_cursor,
             )
         )
 
@@ -632,12 +643,18 @@ def get_meeting_sessions(
     )
 
 
-def _bundle_body(content: str, include: bool, max_bytes: int) -> tuple[str | None, str | None, bool, int]:
+def _bundle_body(content: str, include: bool, max_bytes: int) -> tuple[str | None, bool, int]:
+    """Return (first-chunk body, truncated, total_bytes) for a bundled page.
+
+    Bundled pages are not paginated in place: a truncated body is signalled via
+    ``truncated`` and the full page is retrieved with ``get_page(title=...)``,
+    which owns the chunk-cursor contract. No per-page continuation token is minted
+    here because ``get_meeting_sessions`` exposes no cursor parameter to redeem one.
+    """
     if not include:
-        return None, None, False, 0
-    chunk, _start, end, total, has_more = chunk_utf8(content, start=0, max_bytes=max_bytes)
-    cursor = encode_cursor({"o": end}) if has_more else None
-    return chunk, cursor, has_more, total
+        return None, False, 0
+    chunk, _start, _end, total, has_more = chunk_utf8(content, start=0, max_bytes=max_bytes)
+    return chunk, has_more, total
 
 
 # --------------------------------------------------------------------------- #

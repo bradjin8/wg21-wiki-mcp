@@ -124,7 +124,7 @@ does not re-enter the per-connection path either.)
 | **Transport encryption** | HTTP is cleartext | Localhost-only defaults | TLS termination (reverse proxy or uvicorn SSL) |
 | **Authentication** | Anyone who can reach the port can call tools | Localhost bind; loopback auto-gets SDK Host validation; non-loopback binds refused unless `WG21_HTTP_ALLOWED_HOSTS` is set | MCP-layer Bearer/OAuth + network ACLs |
 | **DNS rebinding / Host spoofing** | A rebound name reaches a non-loopback listener | Loopback auto-protected; non-loopback requires an explicit `allowed_hosts` allow-list or the bind is refused | Curated allow-list per deployment |
-| **CORS** | Browser-origin clients could call the API | `allowed_origins` left empty (browser Origins rejected); non-browser clients send no Origin | Explicit origin allowlist if browser clients are needed |
+| **CORS** | Browser-origin clients could call the API | Loopback default inherits the SDK's auto-populated Origins (`http://127.0.0.1:*`, `http://localhost:*`, `http://[::1]:*`), so a browser page on those origins is accepted; on a non-loopback bind `allowed_origins` is left empty, so any browser Origin is rejected (non-browser clients send no Origin) | Explicit origin allowlist if browser clients are needed |
 | **Rate limiting** | Unbounded tool calls → wiki API abuse | None in prototype | Per-client or global rate limits; cache-first already helps |
 | **Information disclosure** | Tools return verbatim wiki content | Same as stdio — intended for authorized users | Access control at MCP boundary |
 

@@ -81,7 +81,7 @@ def test_chunk_slices_are_valid_utf8(text: str, max_bytes: int) -> None:
 @settings(max_examples=100)
 def test_cursor_roundtrip_property(payload: dict) -> None:
     """encode_cursor / decode_cursor is a round-trip for JSON-serializable dicts."""
-    assert decode_cursor(encode_cursor(payload)) == payload
+    assert decode_cursor(encode_cursor(payload, kind="search"), kind="search") == payload
 
 
 @given(
@@ -92,7 +92,7 @@ def test_malformed_cursor_raises_invalid_params(garbage: bytes) -> None:
     """Random bytes that are not valid dict JSON must raise INVALID_PARAMS."""
     token = base64.urlsafe_b64encode(garbage).decode("ascii")
     with pytest.raises(MCPError) as exc_info:
-        decode_cursor(token)
+        decode_cursor(token, kind="search")
     assert exc_info.value.error.code == INVALID_PARAMS
 
 
@@ -109,20 +109,20 @@ def test_malformed_cursor_raises_invalid_params(garbage: bytes) -> None:
 def test_adversarial_cursors_raise_invalid_params(cursor: str) -> None:
     """Malformed, truncated, and oversized cursors raise INVALID_PARAMS, never crash."""
     with pytest.raises(MCPError) as exc:
-        decode_cursor(cursor)
+        decode_cursor(cursor, kind="search")
     assert exc.value.error.code == INVALID_PARAMS
 
 
 def test_oversized_cursor_token_raises() -> None:
     """Very large opaque tokens are rejected without crashing."""
     with pytest.raises(MCPError) as exc:
-        decode_cursor("A" * 10_000)
+        decode_cursor("A" * 10_000, kind="search")
     assert exc.value.error.code == INVALID_PARAMS
 
 
 def test_large_valid_cursor_payload_round_trips() -> None:
     """A large but valid dict cursor encodes and decodes without error."""
     huge = {"x": "y" * 50_000}
-    token = encode_cursor(huge)
-    decoded = decode_cursor(token)
+    token = encode_cursor(huge, kind="search")
+    decoded = decode_cursor(token, kind="search")
     assert decoded == huge

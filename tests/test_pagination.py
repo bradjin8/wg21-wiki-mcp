@@ -32,16 +32,16 @@ def test_page_chunk_cursor_rejects_equal_length_different_body():
 
 def test_cursor_roundtrip():
     payload = {"o": 1234, "c": "abc"}
-    assert decode_cursor(encode_cursor(payload)) == payload
+    assert decode_cursor(encode_cursor(payload, kind="search"), kind="search") == payload
 
 
 def test_decode_none_is_empty():
-    assert decode_cursor(None) == {}
+    assert decode_cursor(None, kind="search") == {}
 
 
 def test_invalid_cursor_raises_invalid_params():
     with pytest.raises(MCPError) as exc:
-        decode_cursor("!!!not-base64!!!")
+        decode_cursor("!!!not-base64!!!", kind="search")
     assert exc.value.error.code == -32602
 
 
@@ -51,22 +51,55 @@ def test_non_dict_cursor_rejected():
 
     bad = base64.urlsafe_b64encode(json.dumps([1, 2]).encode()).decode()
     with pytest.raises(MCPError):
-        decode_cursor(bad)
+        decode_cursor(bad, kind="search")
+
+
+def test_cursor_rejected_when_producer_kind_differs():
+    """A cursor minted by one tool must not be accepted by another (producer key)."""
+    token = encode_cursor({"o": 5}, kind="search")
+    with pytest.raises(MCPError) as exc:
+        decode_cursor(token, kind="meetings")
+    assert exc.value.error.code == -32602
+    # cursor_offset enforces the same producer scoping.
+    with pytest.raises(MCPError):
+        cursor_offset(token, kind="meetings")
+    assert cursor_offset(token, kind="search") == 5
+
+
+def test_unstamped_cursor_rejected():
+    """A dict cursor without the producer envelope is rejected, not silently read."""
+    import base64
+    import json
+
+    legacy = base64.urlsafe_b64encode(json.dumps({"o": 5}).encode()).decode()
+    with pytest.raises(MCPError) as exc:
+        decode_cursor(legacy, kind="search")
+    assert exc.value.error.code == -32602
+
+
+def test_deeply_nested_cursor_raises_invalid_params():
+    """json.loads raises RecursionError on deep nesting; it must map to -32602."""
+    import base64
+
+    nested = base64.urlsafe_b64encode(b"[" * 2000 + b"]" * 2000).decode()
+    with pytest.raises(MCPError) as exc:
+        decode_cursor(nested, kind="search")
+    assert exc.value.error.code == -32602
 
 
 def test_cursor_offset_defaults_to_zero():
-    assert cursor_offset(None) == 0
-    assert cursor_offset(encode_cursor({})) == 0
+    assert cursor_offset(None, kind="search") == 0
+    assert cursor_offset(encode_cursor({}, kind="search"), kind="search") == 0
 
 
 def test_cursor_offset_roundtrip():
-    assert cursor_offset(encode_cursor({"o": 42})) == 42
+    assert cursor_offset(encode_cursor({"o": 42}, kind="search"), kind="search") == 42
 
 
 @pytest.mark.parametrize("default", [-1, True])
 def test_cursor_offset_rejects_invalid_default(default):
     with pytest.raises(MCPError) as exc:
-        cursor_offset(None, default=default)
+        cursor_offset(None, kind="search", default=default)
     assert exc.value.error.code == -32602
 
 
@@ -81,7 +114,7 @@ def test_cursor_offset_rejects_invalid_default(default):
 )
 def test_cursor_offset_rejects_invalid_values(payload):
     with pytest.raises(MCPError) as exc:
-        cursor_offset(encode_cursor(payload))
+        cursor_offset(encode_cursor(payload, kind="search"), kind="search")
     assert exc.value.error.code == -32602
 
 

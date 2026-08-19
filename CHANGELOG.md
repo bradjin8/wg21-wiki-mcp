@@ -22,6 +22,10 @@ for the pre-1.0 API stability policy and deprecation timeline.
   (per-probe HTTP timeout cap, default **12** seconds) and
   `ISOCPP_WIKI_URL_REMAP_TTL` (remap-cache TTL, default **604800** seconds /
   one week). See [.env.example](.env.example).
+- `WG21_HTTP_ALLOWED_HOSTS`: comma-separated Host-header allow-list (exact
+  `host:port` or `host:*` wildcard) required to bind an HTTP transport to a
+  non-loopback host. See [.env.example](.env.example) and
+  [docs/TRANSPORT-EVAL.md](docs/TRANSPORT-EVAL.md).
 
 ### Changed
 
@@ -60,6 +64,19 @@ for the pre-1.0 API stability policy and deprecation timeline.
     lockfile job drops the `pip<26.2` pin workaround.
   - Pinned GitHub Actions: `sigstore/gh-action-sigstore-python` v3.4.0 → v3.5.0 and
     `pypa/gh-action-pypi-publish` v1.14.1 → v1.14.2 in `publish.yml`.
+
+### Security
+
+- HTTP transports now **fail closed** on a non-loopback bind: with
+  `WG21_HTTP_HOST` set to anything other than `127.0.0.1`/`localhost`/`::1`, the
+  server refuses to start unless `WG21_HTTP_ALLOWED_HOSTS` supplies a Host-header
+  allow-list, and then applies `TransportSecuritySettings` (DNS-rebinding
+  protection on, `allowed_hosts` set) to both `sse` and `streamable-http`.
+  Previously `main()` only logged a warning and bound anyway, leaving Host-header
+  validation off beyond localhost. **Operator action:** anyone already running
+  `WG21_HTTP_HOST=0.0.0.0` (or another non-loopback host) must now also set
+  `WG21_HTTP_ALLOWED_HOSTS` or the server will exit at startup; loopback binds are
+  unaffected and keep the SDK's auto-enabled protection.
 
 ## [0.3.1] - 2026-07-31
 

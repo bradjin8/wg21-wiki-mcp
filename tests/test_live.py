@@ -121,7 +121,7 @@ def test_get_page_chunk_pagination(live_ctx):
             "to exercise get_page chunk cursor round-trip"
         )
     assert page1.chunk.next_cursor is not None
-    decoded = decode_cursor(page1.chunk.next_cursor)
+    decoded = decode_cursor(page1.chunk.next_cursor, kind="page")
     assert decoded.get("o") == page1.chunk.byte_end
     page2 = tools.get_page(live_ctx, title, max_bytes=1024, cursor=page1.chunk.next_cursor)
     assert page2.chunk.byte_start == page1.chunk.byte_end
@@ -167,7 +167,7 @@ def test_search_wiki_pagination(live_ctx):
     page1 = tools.search_wiki(live_ctx, "C++", limit=2)
     if not page1.next_cursor:
         pytest.skip("not enough search hits to exercise pagination")
-    decoded = decode_cursor(page1.next_cursor)
+    decoded = decode_cursor(page1.next_cursor, kind="search")
     assert "o" in decoded
     page2 = tools.search_wiki(live_ctx, "C++", limit=2, cursor=page1.next_cursor)
     assert isinstance(page2.hits, list)
@@ -191,7 +191,7 @@ def test_list_pages_pagination(live_ctx):
     page1 = tools.list_pages(live_ctx, 0, limit=1)
     if not page1.next_cursor:
         pytest.skip("not enough pages to exercise pagination")
-    decoded = decode_cursor(page1.next_cursor)
+    decoded = decode_cursor(page1.next_cursor, kind="pages")
     assert "c" in decoded
     page2 = tools.list_pages(live_ctx, 0, limit=1, cursor=page1.next_cursor)
     assert isinstance(page2.pages, list)
@@ -224,7 +224,7 @@ def test_list_meetings_pagination(live_ctx):
     page1 = tools.list_meetings(live_ctx, limit=1)
     if not page1.next_cursor:
         pytest.skip("not enough meetings to exercise pagination")
-    decoded = decode_cursor(page1.next_cursor)
+    decoded = decode_cursor(page1.next_cursor, kind="meetings")
     assert "o" in decoded
     page2 = tools.list_meetings(live_ctx, limit=1, cursor=page1.next_cursor)
     assert isinstance(page2.meetings, list)
