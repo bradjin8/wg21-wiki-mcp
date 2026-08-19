@@ -148,28 +148,58 @@ def test_lifespan_runs(monkeypatch, tmp_path):
     assert asyncio.run(run()) is True
 
 
+def test_lifespan_process_owned_is_connection_scoped(monkeypatch, tmp_path):
+    """Under HTTP ownership the lifespan must not log in or tear down the shared context."""
+    ctx = _fake_ctx(tmp_path)
+    with server._state_lock:
+        server._state["ctx"] = ctx
+    monkeypatch.setattr(server, "_context_process_owned", True)
+
+    def _fail_get_context() -> ServerContext:
+        raise AssertionError("process-owned lifespan must not build/log in a context")
+
+    monkeypatch.setattr(server, "get_context", _fail_get_context)
+
+    async def run():
+        async with server._lifespan(server.mcp):
+            with server._state_lock:
+                assert server._state.get("ctx") is ctx
+            return True
+
+    try:
+        assert asyncio.run(run()) is True
+        # The shared context survives the connection-scoped lifespan exit.
+        with server._state_lock:
+            assert server._state.get("ctx") is ctx
+    finally:
+        with server._state_lock:
+            server._state.pop("ctx", None)
+        ctx.close()
+
+
 def test_wrap_passthrough_mcp_error():
-    from mcp.shared.exceptions import McpError
-    from mcp.types import ErrorData
+    from mcp.shared.exceptions import MCPError
 
     from wg21_wiki_mcp.server import _wrap
 
     def _raise_mcp() -> None:
-        raise McpError(ErrorData(code=-32602, message="bad params"))
+        raise MCPError(-32602, "bad params")
 
-    with pytest.raises(McpError):
+    with pytest.raises(MCPError) as exc_info:
         _wrap(_raise_mcp)
+    assert exc_info.value.code == -32602
+    assert exc_info.value.message == "bad params"
 
 
 def test_wrap_converts_unexpected_exception():
-    from mcp.shared.exceptions import McpError
+    from mcp.shared.exceptions import MCPError
 
     from wg21_wiki_mcp.server import _wrap
 
     def _boom() -> None:
         raise ValueError("unexpected")
 
-    with pytest.raises(McpError):
+    with pytest.raises(MCPError):
         _wrap(_boom)
 
 
@@ -178,9 +208,9 @@ def test_main_runs_mcp_stdio_default(monkeypatch):
     monkeypatch.setenv("WIKI_BOT_PASSWORD", "secret")
     captured: dict[str, object] = {}
 
-    def _run(transport: str = "stdio", mount_path: str | None = None) -> None:
+    def _run(transport: str = "stdio", **kwargs: object) -> None:
         captured["transport"] = transport
-        captured["mount_path"] = mount_path
+        captured["kwargs"] = kwargs
 
     monkeypatch.setattr(server.mcp, "run", _run)
     try:
@@ -200,20 +230,71 @@ def test_main_selects_sse_transport(monkeypatch):
     monkeypatch.setenv("WG21_HTTP_PORT", "8765")
     captured: dict[str, object] = {}
 
-    def _run(transport: str = "stdio", mount_path: str | None = None) -> None:
+    def _run(transport: str = "stdio", **kwargs: object) -> None:
         captured["transport"] = transport
-        captured["mount_path"] = mount_path
+        captured["kwargs"] = kwargs
 
     monkeypatch.setattr(server.mcp, "run", _run)
-    original_host = server.mcp.settings.host
-    original_port = server.mcp.settings.port
     try:
         server.main()
         assert captured["transport"] == "sse"
-        assert server.mcp.settings.port == 8765
+        # Loopback bind keeps the SDK's built-in localhost protection (None).
+        assert captured["kwargs"] == {"host": "127.0.0.1", "port": 8765, "transport_security": None}
     finally:
-        server.mcp.settings.host = original_host
-        server.mcp.settings.port = original_port
+        with server._state_lock:
+            ctx = server._state.pop("ctx", None)
+        if ctx is not None:
+            ctx.close()
+
+
+def test_main_rejects_non_loopback_http_without_allowlist(monkeypatch):
+    monkeypatch.setenv("WIKI_BOT_USERNAME", "Acct@bot")
+    monkeypatch.setenv("WIKI_BOT_PASSWORD", "secret")
+    monkeypatch.setenv("WG21_TRANSPORT", "sse")
+    monkeypatch.setenv("WG21_HTTP_HOST", "0.0.0.0")
+    monkeypatch.delenv("WG21_HTTP_ALLOWED_HOSTS", raising=False)
+    ran = {"called": False}
+
+    def _run(*args: object, **kwargs: object) -> None:
+        ran["called"] = True
+
+    monkeypatch.setattr(server.mcp, "run", _run)
+    try:
+        with pytest.raises(server.ConfigError, match="non-loopback"):
+            server.main()
+        assert ran["called"] is False
+        # The primed context is torn down when the bind is refused.
+        with server._state_lock:
+            assert "ctx" not in server._state
+    finally:
+        with server._state_lock:
+            ctx = server._state.pop("ctx", None)
+        if ctx is not None:
+            ctx.close()
+
+
+def test_main_non_loopback_http_with_allowlist_sets_host_validation(monkeypatch):
+    monkeypatch.setenv("WIKI_BOT_USERNAME", "Acct@bot")
+    monkeypatch.setenv("WIKI_BOT_PASSWORD", "secret")
+    monkeypatch.setenv("WG21_TRANSPORT", "streamable-http")
+    monkeypatch.setenv("WG21_HTTP_HOST", "0.0.0.0")
+    monkeypatch.setenv("WG21_HTTP_ALLOWED_HOSTS", "wiki.example.org:*, 203.0.113.5:8000")
+    captured: dict[str, object] = {}
+
+    def _run(transport: str = "stdio", **kwargs: object) -> None:
+        captured["transport"] = transport
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(server.mcp, "run", _run)
+    try:
+        server.main()
+        assert captured["transport"] == "streamable-http"
+        security = captured["kwargs"]["transport_security"]
+        assert security is not None
+        assert security.enable_dns_rebinding_protection is True
+        # Parsed in order, whitespace trimmed, applied to the transport.
+        assert security.allowed_hosts == ["wiki.example.org:*", "203.0.113.5:8000"]
+    finally:
         with server._state_lock:
             ctx = server._state.pop("ctx", None)
         if ctx is not None:

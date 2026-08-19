@@ -8,7 +8,7 @@ could go next.
 ## Component map
 
 ```
-server.py        FastMCP server; registers tools; lifespan logs in.
+server.py        MCPServer; registers tools; lifespan logs in.
   tools.py       Tool logic (structured outputs). All page content via the fetcher.
     context.py   ServerContext: wires config + client + calendar + cache + fetcher.
       fetch.py       PageFetcher: cache-first, batched, single-flight retrieval.
@@ -54,9 +54,12 @@ session), transparently re-logs-in via the pinned path.
   cache; at the tool boundary legacy ``wiki.edg.com`` links in ``get_page``
   bodies, bundled meeting-session wikitext (when ``include_wikitext`` includes a
   page body), search snippets (when opted in), and recent-change comments are
-  rewritten to ``wiki.isocpp.org`` before the MCP response. A link with no known
-  successor keeps its URL followed by the literal marker ``(stale URL)``, chosen
-  so the annotation cannot open a MediaWiki link sequence.
+  rewritten to ``wiki.isocpp.org`` before the MCP response. When a legacy link is
+  not resolved — no known successor, the shared probe budget is exhausted, or a
+  probe fails or times out — it keeps its original URL followed by the literal
+  marker ``(stale URL)``. The marker is a best-effort "unresolved" verdict, not a
+  proof that no successor exists, and is chosen so the annotation cannot open a
+  MediaWiki link sequence.
 - Every result carries verifiable provenance; redirects and title normalization
   are surfaced so content is never misattributed.
 - Long pages are chunked only on UTF-8 boundaries; partiality is always signaled
@@ -136,7 +139,7 @@ Under sustained lag (`maxlag` / slow responses), per-call timeouts surface as `F
 
 ## Error contract
 
-Every domain error is converted to a structured `McpError` / `ErrorData` with a
+Every domain error is converted to a structured `MCPError` / `ErrorData` with a
 distinct code **before** it crosses the tool boundary. The single mapping
 function lives in `errors.py`; `server._wrap()` calls it around every tool
 invocation.
@@ -153,7 +156,7 @@ invocation.
 - Auth-error messages are fixed strings; they never reflect the underlying
   login-exception text, which could carry credential-adjacent information.
 - All messages are actionable and contain no wiki page content.
-- `McpError` instances (including `INVALID_PARAMS`) pass through `_wrap` unchanged.
+- `MCPError` instances (including `INVALID_PARAMS`) pass through `_wrap` unchanged.
 
 ## Dependencies
 

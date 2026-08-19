@@ -8,49 +8,89 @@ reassembling all slices reproduces the page byte-for-byte.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 
-from mcp.shared.exceptions import McpError
-from mcp.types import INVALID_PARAMS, ErrorData
+from mcp.shared.exceptions import MCPError
+from mcp.types import INVALID_PARAMS
 
 
-def encode_cursor(payload: dict) -> str:
-    """Encode a small dict as an opaque base64url cursor."""
-    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+def body_digest(data: bytes) -> str:
+    """Short content digest that binds a chunk cursor to exact sanitized bytes.
+
+    Guards against resuming a cursor into a *different* body that happens to share
+    the same revision and byte length (e.g. two URL-hygiene results of equal
+    length, or a section vs. full-page fetch that share the page revid).
+    """
+    return hashlib.blake2b(data, digest_size=16).hexdigest()
+
+
+# Producer keys stamped into every cursor. A cursor is only honored by the tool
+# that minted it: one mint produces several incompatible payload shapes (result
+# offset ``o``, API continuation ``c``, page-chunk identity ``o/r/t/h``) behind
+# identically typed ``next_cursor`` fields, so without a producer key a cursor
+# handed to the wrong tool is silently misread (e.g. a page-chunk byte offset read
+# as a search result offset) instead of raising the -32602 contract.
+CURSOR_KIND_SEARCH = "search"
+CURSOR_KIND_PAGES = "pages"
+CURSOR_KIND_MEETINGS = "meetings"
+CURSOR_KIND_CHANGES = "changes"
+CURSOR_KIND_PAGE_CHUNK = "page"
+
+
+def encode_cursor(payload: dict, *, kind: str) -> str:
+    """Encode a small dict as an opaque base64url cursor stamped with a producer ``kind``.
+
+    ``kind`` binds the token to the tool that minted it (see ``decode_cursor``).
+    """
+    envelope = {"k": kind, "p": payload}
+    raw = json.dumps(envelope, separators=(",", ":"), sort_keys=True).encode("utf-8")
     return base64.urlsafe_b64encode(raw).decode("ascii")
 
 
-def decode_cursor(cursor: str | None) -> dict:
-    """Decode an opaque cursor. Returns {} for None; raises -32602 if malformed."""
+def decode_cursor(cursor: str | None, *, kind: str) -> dict:
+    """Decode an opaque cursor minted by the same ``kind``.
+
+    Returns ``{}`` for ``None``. Raises -32602 if the token is malformed, is not a
+    dict envelope, or was minted by a different tool (producer ``kind`` mismatch),
+    so a cursor passed to the wrong tool fails loudly instead of being misread.
+    """
     if cursor is None:
         return {}
     try:
         raw = base64.urlsafe_b64decode(cursor.encode("ascii"))
         value = json.loads(raw)
-    except (ValueError, TypeError) as exc:
-        raise McpError(ErrorData(code=INVALID_PARAMS, message="Invalid or expired cursor.")) from exc
+    except (ValueError, TypeError, RecursionError) as exc:
+        # RecursionError (a RuntimeError) is raised by json.loads on deeply nested
+        # input; treat it like any other malformed cursor rather than a transient fault.
+        raise MCPError(INVALID_PARAMS, "Invalid or expired cursor.") from exc
     if not isinstance(value, dict):
-        raise McpError(ErrorData(code=INVALID_PARAMS, message="Invalid cursor payload."))
-    return value
+        raise MCPError(INVALID_PARAMS, "Invalid cursor payload.")
+    if value.get("k") != kind:
+        raise MCPError(INVALID_PARAMS, "Invalid or expired cursor.")
+    payload = value.get("p")
+    if not isinstance(payload, dict):
+        raise MCPError(INVALID_PARAMS, "Invalid cursor payload.")
+    return payload
 
 
 def _validated_offset(value: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise McpError(ErrorData(code=INVALID_PARAMS, message="Invalid cursor offset."))
+        raise MCPError(INVALID_PARAMS, "Invalid cursor offset.")
     if value < 0:
-        raise McpError(ErrorData(code=INVALID_PARAMS, message="Invalid cursor offset."))
+        raise MCPError(INVALID_PARAMS, "Invalid cursor offset.")
     return value
 
 
-def cursor_offset(cursor: str | None, *, default: int = 0) -> int:
-    """Return a non-negative integer offset from an opaque cursor payload.
+def cursor_offset(cursor: str | None, *, kind: str, default: int = 0) -> int:
+    """Return a non-negative integer offset from a ``kind``-scoped cursor payload.
 
     Raises:
-        McpError: if the cursor envelope is malformed or ``o`` is not a
-            non-negative integer.
+        MCPError: if the cursor envelope is malformed, was minted by a different
+            tool, or ``o`` is not a non-negative integer.
     """
     default = _validated_offset(default)
-    payload = decode_cursor(cursor)
+    payload = decode_cursor(cursor, kind=kind)
     if "o" not in payload:
         return default
     return _validated_offset(payload["o"])
@@ -61,24 +101,26 @@ def page_chunk_offset(
     *,
     revid: int | None,
     total_bytes: int,
+    digest: str,
 ) -> int:
-    """Return a byte offset bound to ``revid`` and ``total_bytes``.
+    """Return a byte offset bound to ``revid``, ``total_bytes`` and ``digest``.
 
-    Sanitized page text can change length between calls, so a bare offset is not
-    enough to resume chunking safely.
+    Sanitized page text can change (and even keep the same length) between calls,
+    so the offset is only honored when the cursor's bound revision, byte length,
+    and content digest all still match the body being chunked.
     """
-    payload = decode_cursor(cursor)
+    payload = decode_cursor(cursor, kind=CURSOR_KIND_PAGE_CHUNK)
     if not payload:
         return 0
     offset = _validated_offset(payload.get("o", 0))
-    if payload.get("r") != revid or payload.get("t") != total_bytes:
-        raise McpError(ErrorData(code=INVALID_PARAMS, message="Invalid or expired cursor."))
+    if payload.get("r") != revid or payload.get("t") != total_bytes or payload.get("h") != digest:
+        raise MCPError(INVALID_PARAMS, "Invalid or expired cursor.")
     return offset
 
 
-def encode_page_chunk_cursor(byte_end: int, *, revid: int | None, total_bytes: int) -> str:
-    """Encode a chunk cursor bound to the sanitized body identity."""
-    return encode_cursor({"o": byte_end, "r": revid, "t": total_bytes})
+def encode_page_chunk_cursor(byte_end: int, *, revid: int | None, total_bytes: int, digest: str) -> str:
+    """Encode a chunk cursor bound to the sanitized body identity (revid, length, digest)."""
+    return encode_cursor({"o": byte_end, "r": revid, "t": total_bytes, "h": digest}, kind=CURSOR_KIND_PAGE_CHUNK)
 
 
 def _floor_utf8_boundary(data: bytes, index: int) -> int:

@@ -12,17 +12,20 @@ limiting) is tracked in the follow-up issue draft below.
 
 ## What the MCP Python SDK provides
 
-The project pins `mcp>=1.27,<2` (`pyproject.toml`). `FastMCP.run()` accepts:
+The project pins `mcp>=2,<3` (`pyproject.toml`). `MCPServer.run()` accepts:
 
 | Transport | SDK support | Default bind | Endpoints (defaults) |
 |-----------|-------------|--------------|----------------------|
 | `stdio` | `run_stdio_async()` | n/a (stdin/stdout) | n/a |
-| `sse` | `run_sse_async(mount_path?)` via **uvicorn** + Starlette | `127.0.0.1:8000` | SSE: `/sse`, messages: `/messages/` |
+| `sse` | `run_sse_async()` via **uvicorn** + Starlette | `127.0.0.1:8000` | SSE: `/sse`, messages: `/messages/` |
 | `streamable-http` | `run_streamable_http_async()` via uvicorn | `127.0.0.1:8000` | `/mcp` |
 
 Both HTTP modes use **uvicorn** (a transitive dependency of `mcp`) and Starlette
-routing. The SDK exposes host/port on `FastMCP.settings` (`host`, `port`,
-`sse_path`, `message_path`, `streamable_http_path`).
+routing. Host and port are passed to `MCPServer.run()` or to the async runners
+(`run_sse_async()` / `run_streamable_http_async()`), not via a shared `settings`
+object. The app factories (`sse_app()` / `streamable_http_app()`) return an ASGI
+application and accept path and `host` overrides but **not** a port — when
+serving the ASGI app directly, configure the port on the ASGI server (uvicorn).
 
 **Streamable HTTP** is the newer MCP transport (replacing the older SSE split
 endpoint pattern in many clients). It is available in our pinned SDK version and
@@ -33,8 +36,13 @@ is the better long-term HTTP choice when we invest in remote deployment.
 
 Out of the box the SDK also supports optional **Bearer token auth**
 (`settings.auth`, `AuthenticationMiddleware`) and **DNS rebinding protection**
-(`transport_security` with `allowed_hosts` / `allowed_origins` defaulting to
-localhost). We do not enable auth in the prototype.
+(`transport_security` with `allowed_hosts` / `allowed_origins`). The SDK only
+**auto-enables** Host-header validation for loopback hosts (`127.0.0.1`,
+`localhost`, `::1`); a non-loopback bind is served with validation **off** unless
+settings are supplied. `server.main()` closes that gap: it refuses a non-loopback
+bind unless `WG21_HTTP_ALLOWED_HOSTS` supplies an allow-list, then passes an
+explicit `TransportSecuritySettings(enable_dns_rebinding_protection=True,
+allowed_hosts=...)` to both transports. We do not enable auth in the prototype.
 
 ### Prototype wiring
 
@@ -48,12 +56,18 @@ WG21_TRANSPORT=streamable-http wg21-wiki-mcp
 
 # Optional bind overrides
 WG21_HTTP_HOST=127.0.0.1 WG21_HTTP_PORT=9000 WG21_TRANSPORT=sse wg21-wiki-mcp
+
+# Non-loopback bind: an allow-list of Host header values is required
+WG21_HTTP_HOST=0.0.0.0 WG21_HTTP_ALLOWED_HOSTS=wiki.example.org:* WG21_TRANSPORT=sse wg21-wiki-mcp
 ```
 
-`Config.transport`, `Config.http_host`, and `Config.http_port` are read from
-`WG21_TRANSPORT`, `WG21_HTTP_HOST`, and `WG21_HTTP_PORT` in `config.py`.
-`server.main()` applies HTTP settings to `mcp.settings` before calling
-`mcp.run(transport=...)`.
+`Config.transport`, `Config.http_host`, `Config.http_port`, and
+`Config.http_allowed_hosts` are read from `WG21_TRANSPORT`, `WG21_HTTP_HOST`,
+`WG21_HTTP_PORT`, and `WG21_HTTP_ALLOWED_HOSTS` in `config.py`. `server.main()`
+passes HTTP bind settings as keyword arguments to
+`mcp.run(transport=..., host=..., port=..., transport_security=...)`, where
+`transport_security` is `None` for loopback (SDK auto-protects) and an explicit
+allow-list for non-loopback binds.
 
 Offline tests in `tests/test_transport_sse.py` start an SSE listener with a
 fake `ServerContext` and call `wiki_status` and `search_wiki` through the MCP
@@ -63,8 +77,9 @@ client SDK.
 
 `server.py` keeps a process-global `ServerContext` in `_state`, guarded by
 `_state_lock`. `get_context()` lazily builds one context from `Config.from_env()`
-and caches it for the process lifetime. The `_lifespan` hook logs in once at
-server start and tears the context down on shutdown.
+and caches it for the process lifetime. For stdio, the `_lifespan` hook logs in
+once at server start and tears the context down on shutdown; for HTTP transports
+`server.main()` owns that lifecycle instead (see below).
 
 ### Implications for HTTP transports
 
@@ -91,9 +106,15 @@ multi-agent local use (shared `~/.isocpp.wiki` cache directory).
   same env-configured bot/user credentials. Multi-tenant remote hosting would
   require per-session auth and context, not this singleton.
 
-The `_lifespan` manager runs at **process** start/stop (FastMCP invokes it when
-the HTTP server boots), not per SSE connection — so we do not re-login on every
-HTTP connect. That matches stdio behavior and avoids login storms.
+Under the SDK's SSE app the MCPServer lifespan is **connection-scoped**: the app
+enters it once per SSE connection. So `server.main()` owns the shared
+`ServerContext` at **process** scope instead — it neither logs in nor tears the
+context down per connect. Login happens lazily on first wiki use (or once at
+stdio start, which enters its lifespan a single time), and the context is closed
+once when the listener stops. This avoids re-login storms and prevents one
+connection's teardown from closing a context still in use by another. (The
+streamable-HTTP session manager owns its own process-scoped app lifespan, so it
+does not re-enter the per-connection path either.)
 
 ## Security implications
 
@@ -101,8 +122,9 @@ HTTP connect. That matches stdio behavior and avoids login storms.
 |-------|------|----------------------|------------------------|
 | **Credential exposure** | Wiki passwords in env vars; HTTP exposes an attack surface on the host | Default bind `127.0.0.1`; not documented for WAN | Secrets via vault; never expose raw wiki creds to clients |
 | **Transport encryption** | HTTP is cleartext | Localhost-only defaults | TLS termination (reverse proxy or uvicorn SSL) |
-| **Authentication** | Anyone who can reach the port can call tools | Localhost bind; SDK DNS-rebinding defaults | MCP-layer Bearer/OAuth + network ACLs |
-| **CORS** | Browser-origin clients could call the API | SDK `allowed_origins` defaults to localhost | Explicit origin allowlist if browser clients are needed |
+| **Authentication** | Anyone who can reach the port can call tools | Localhost bind; loopback auto-gets SDK Host validation; non-loopback binds refused unless `WG21_HTTP_ALLOWED_HOSTS` is set | MCP-layer Bearer/OAuth + network ACLs |
+| **DNS rebinding / Host spoofing** | A rebound name reaches a non-loopback listener | Loopback auto-protected; non-loopback requires an explicit `allowed_hosts` allow-list or the bind is refused | Curated allow-list per deployment |
+| **CORS** | Browser-origin clients could call the API | Loopback default inherits the SDK's auto-populated Origins (`http://127.0.0.1:*`, `http://localhost:*`, `http://[::1]:*`), so a browser page on those origins is accepted; on a non-loopback bind `allowed_origins` is left empty, so any browser Origin is rejected (non-browser clients send no Origin) | Explicit origin allowlist if browser clients are needed |
 | **Rate limiting** | Unbounded tool calls → wiki API abuse | None in prototype | Per-client or global rate limits; cache-first already helps |
 | **Information disclosure** | Tools return verbatim wiki content | Same as stdio — intended for authorized users | Access control at MCP boundary |
 

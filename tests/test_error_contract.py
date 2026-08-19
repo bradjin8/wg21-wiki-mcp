@@ -1,9 +1,9 @@
-"""MCP error-contract tests: domain errors map to structured ``McpError`` codes."""
+"""MCP error-contract tests: domain errors map to structured ``MCPError`` codes."""
 
 from __future__ import annotations
 
 import pytest
-from mcp.shared.exceptions import McpError
+from mcp.shared.exceptions import MCPError
 from mcp.types import INVALID_PARAMS
 
 from wg21_wiki_mcp.errors import (
@@ -20,7 +20,7 @@ from wg21_wiki_mcp.errors import (
 from wg21_wiki_mcp.pagination import encode_cursor
 
 
-class TestToMcpError:
+class TestToMCPError:
     def test_page_not_found_maps_to_code_1(self):
         err = to_mcp_error(PageNotFound("Page not found: 'Ghost'"))
         assert err.error.code == PAGE_NOT_FOUND
@@ -45,9 +45,7 @@ class TestToMcpError:
         assert "WIKI_BOT_USERNAME" in err.error.message
 
     def test_existing_mcp_error_passes_through_unchanged(self):
-        from mcp.types import ErrorData
-
-        original = McpError(ErrorData(code=INVALID_PARAMS, message="bad cursor"))
+        original = MCPError(INVALID_PARAMS, "bad cursor")
         assert to_mcp_error(original) is original
 
     def test_raw_api_error_maps_to_fetch_error_code(self):
@@ -69,7 +67,7 @@ class TestMissingPageThroughToolBoundary:
         from wg21_wiki_mcp import tools
         from wg21_wiki_mcp.server import _wrap
 
-        with pytest.raises(McpError) as exc_info:
+        with pytest.raises(MCPError) as exc_info:
             _wrap(tools.get_page, make_ctx(fake_client), "NonExistent")
         assert exc_info.value.error.code == PAGE_NOT_FOUND
 
@@ -77,7 +75,7 @@ class TestMissingPageThroughToolBoundary:
         from wg21_wiki_mcp import tools
         from wg21_wiki_mcp.server import _wrap
 
-        with pytest.raises(McpError) as exc_info:
+        with pytest.raises(MCPError) as exc_info:
             _wrap(tools.get_page, make_ctx(fake_client), "NonExistent", section=1)
         assert exc_info.value.error.code == PAGE_NOT_FOUND
 
@@ -87,16 +85,21 @@ class TestBadCursorErrorShape:
         from wg21_wiki_mcp import tools
         from wg21_wiki_mcp.server import _wrap
 
-        with pytest.raises(McpError) as exc_info:
-            _wrap(tools.search_wiki, make_ctx(fake_client), "topic", cursor=encode_cursor({"o": "not-an-int"}))
+        with pytest.raises(MCPError) as exc_info:
+            _wrap(
+                tools.search_wiki,
+                make_ctx(fake_client),
+                "topic",
+                cursor=encode_cursor({"o": "not-an-int"}, kind="search"),
+            )
         assert exc_info.value.error.code == INVALID_PARAMS
 
     def test_negative_offset_through_server_wrap(self, fake_client, make_ctx):
         from wg21_wiki_mcp import tools
         from wg21_wiki_mcp.server import _wrap
 
-        with pytest.raises(McpError) as exc_info:
-            _wrap(tools.list_meetings, make_ctx(fake_client), cursor=encode_cursor({"o": -5}))
+        with pytest.raises(MCPError) as exc_info:
+            _wrap(tools.list_meetings, make_ctx(fake_client), cursor=encode_cursor({"o": -5}, kind="meetings"))
         assert exc_info.value.error.code == INVALID_PARAMS
 
 
@@ -125,7 +128,7 @@ class TestAuthFailureErrorShape:
         def _raise_auth():
             raise AuthError("simulated auth lapse")
 
-        with pytest.raises(McpError) as exc_info:
+        with pytest.raises(MCPError) as exc_info:
             _wrap(_raise_auth)
         assert exc_info.value.error.code == AUTH_ERROR
 
@@ -162,6 +165,6 @@ class TestAuthFailureErrorShape:
         monkeypatch.setattr(client, "_new_site", lambda: AlwaysAuthDeniedSite())
         client.login()
 
-        with pytest.raises(McpError) as exc_info:
+        with pytest.raises(MCPError) as exc_info:
             _wrap(client.api, "query", titles="SomePage")
         assert exc_info.value.error.code == AUTH_ERROR

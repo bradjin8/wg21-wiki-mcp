@@ -1,7 +1,7 @@
 """Centralized error types, codes, and MCP error-contract mapping.
 
 Every domain error that crosses a tool boundary is converted here to a
-structured ``McpError`` / ``ErrorData`` with a distinct, documented code.
+structured ``MCPError`` / ``ErrorData`` with a distinct, documented code.
 All error messages are safe: they contain no credential values and no wiki
 page content.
 
@@ -29,8 +29,7 @@ The cursor / pagination code (``INVALID_PARAMS`` / ``-32602``) is defined in
 
 from __future__ import annotations
 
-from mcp.shared.exceptions import McpError
-from mcp.types import ErrorData
+from mcp.shared.exceptions import MCPError
 
 from .log_safety import auth_error_mcp_message
 
@@ -80,51 +79,44 @@ class ConfigError(WikiMcpError):
 
 
 # ---------------------------------------------------------------------------
-# Mapping to structured McpError
+# Mapping to structured MCPError
 # ---------------------------------------------------------------------------
 
 
-def to_mcp_error(exc: BaseException) -> McpError:
-    """Convert any domain or transport exception to a structured ``McpError``.
+def to_mcp_error(exc: BaseException) -> MCPError:
+    """Convert any domain or transport exception to a structured ``MCPError``.
 
     Use this at every tool boundary so agents always receive a spec-shaped
     error with a distinct, documented code.  Error messages are sanitized:
     they contain no credential values and no wiki page content.
 
-    ``McpError`` instances are returned unchanged so the cursor / pagination
+    ``MCPError`` instances are returned unchanged so the cursor / pagination
     layer (``INVALID_PARAMS``) passes through unmodified.
     """
-    if isinstance(exc, McpError):
+    if isinstance(exc, MCPError):
         return exc
 
     if isinstance(exc, PageNotFound):
         # str(exc) is always "Page not found: <title>" — user-supplied title,
         # not confidential content.
-        return McpError(ErrorData(code=PAGE_NOT_FOUND, message=str(exc) or "Page not found."))
+        return MCPError(PAGE_NOT_FOUND, str(exc) or "Page not found.")
 
     if isinstance(exc, AuthError):
         # AuthError messages are built by log_safety helpers; unsafe legacy
         # messages fall back to AUTH_FAILURE_MESSAGE at the MCP boundary.
-        return McpError(
-            ErrorData(
-                code=AUTH_ERROR,
-                message=auth_error_mcp_message(exc),
-            )
-        )
+        return MCPError(AUTH_ERROR, auth_error_mcp_message(exc))
 
     if isinstance(exc, FetchError):
         # Use a fixed message; the original includes the mwclient exception
         # string which, while not containing credentials, is not useful to agents.
-        return McpError(
-            ErrorData(
-                code=FETCH_ERROR,
-                message="Wiki API fetch failed after retries; check connectivity or try again.",
-            )
+        return MCPError(
+            FETCH_ERROR,
+            "Wiki API fetch failed after retries; check connectivity or try again.",
         )
 
     if isinstance(exc, ConfigError):
         # The ConfigError message names the env vars to set — safe and actionable.
-        return McpError(ErrorData(code=CONFIG_ERROR, message=str(exc) or "Server not configured."))
+        return MCPError(CONFIG_ERROR, str(exc) or "Server not configured.")
 
     # Wrap raw mwclient APIError that escaped the client layer without being
     # converted to FetchError (non-transient, non-auth error code).
@@ -133,19 +125,12 @@ def to_mcp_error(exc: BaseException) -> McpError:
 
         if isinstance(exc, _APIError):
             code_label = getattr(exc, "code", "unknown")
-            return McpError(
-                ErrorData(
-                    code=FETCH_ERROR,
-                    message=f"Wiki API returned an error (code: {code_label}).",
-                )
+            return MCPError(
+                FETCH_ERROR,
+                f"Wiki API returned an error (code: {code_label}).",
             )
     except ImportError:  # pragma: no cover
         pass
 
     # Fallback for any unexpected exception type.
-    return McpError(
-        ErrorData(
-            code=FETCH_ERROR,
-            message="An unexpected server error occurred.",
-        )
-    )
+    return MCPError(FETCH_ERROR, "An unexpected server error occurred.")

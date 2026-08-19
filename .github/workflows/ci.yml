@@ -60,8 +60,7 @@ jobs:
           python -c "import wg21_wiki_mcp; print(wg21_wiki_mcp.__version__)"
       - name: Verify lockfile is current
         run: |
-          # pip-tools 7.6.0 breaks on pip 26.2+ (stdlib_pkgs removed from pip internals).
-          python -m pip install "pip>=26,<26.2" pip-tools==7.6.0
+          python -m pip install pip-tools==7.6.1
           pip-compile pyproject.toml --output-file=requirements-lock.txt --strip-extras
           git diff --exit-code requirements-lock.txt
 
@@ -135,9 +134,10 @@ jobs:
             --benchmark-min-rounds=10
           check
       - name: Run meeting-time benchmarks
-        # benchmarks/meeting-time-baseline.json holds measured means from this
-        # runner (ubuntu-latest, Python 3.12). Regenerate from the benchmark-json
-        # artifact when meeting-time benchmark code changes.
+        # benchmarks/meeting-time-baseline.json holds full measured stats (both means
+        # and medians) from this runner (ubuntu-latest, Python 3.12); the gate below
+        # compares the median. Regenerate from the benchmark-json artifact when
+        # meeting-time benchmark code changes.
         run: |
           pytest tests/test_meeting_time_benchmark.py --benchmark-only --no-cov \
             -o addopts= \
@@ -145,15 +145,18 @@ jobs:
             --benchmark-warmup=off \
             --benchmark-min-rounds=5
       - name: Meeting-time benchmark regression gate
-        # Blocking gate. Meeting-time composites are ms-scale on shared runners where
-        # jitter is material; 50% catches genuine regressions (>=1.5x slowdowns) while
-        # tolerating noise. We still re-run once before failing to absorb one-off spikes.
+        # Blocking gate. Meeting-time composites are ms-scale and the cold path runs
+        # warmup-off with a fresh cache per round, so a single shared-runner spike (one
+        # ~50ms round out of five) can dominate the mean while the median stays flat.
+        # We gate on the median, which is robust to that one-off tail: 50% still catches
+        # genuine regressions (>=1.5x slowdowns) while tolerating jitter. We also re-run
+        # once before failing to absorb one-off spikes.
         run: |
           set -euo pipefail
           check_meeting() {
             python scripts/check_benchmark_regression.py \
               meeting-time-benchmark.json benchmarks/meeting-time-baseline.json \
-              --max-regression 0.5
+              --max-regression 0.5 --stat median
           }
           if check_meeting; then
             exit 0

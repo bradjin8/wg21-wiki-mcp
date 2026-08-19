@@ -6,10 +6,10 @@
 Stable MCP host contract for `wg21-wiki-mcp`. Tool names, parameter
 names/types, error codes, and provenance fields are governed by
 [STABILITY.md](../STABILITY.md). See [CHANGELOG.md](../CHANGELOG.md) for release
-version history. FastMCP also exposes JSON schemas to MCP clients at runtime.
+version history. MCPServer also exposes JSON schemas to MCP clients at runtime.
 
 All tools return structured Pydantic models (see [models.py](../src/wg21_wiki_mcp/models.py)).
-Errors surface as `McpError` with application codes documented in
+Errors surface as `MCPError` with application codes documented in
 [README.md](../README.md#error-contract).
 
 ## `get_meeting_overview`

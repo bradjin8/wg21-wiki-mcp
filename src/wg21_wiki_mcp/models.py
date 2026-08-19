@@ -206,15 +206,27 @@ class IsoSlot(BaseModel):
 
 
 class BundledPage(BaseModel):
-    """One page in a session bundle (wikitext when included, with provenance)."""
+    """One page in a session bundle (wikitext when included, with provenance).
+
+    Bundled bodies are not paginated in place. When ``truncated`` is true the body
+    was cut at ``max_page_bytes``; retrieve the full page with ``get_page(title=...)``,
+    which owns the chunk-cursor contract. ``get_meeting_sessions`` exposes no cursor
+    parameter, so no per-page continuation token is emitted.
+    """
 
     title: str
     role: Literal["agenda", "rooms", "evening", "working_group", "other"]
     provenance: Provenance
     wikitext: str | None = None
     size_bytes: int = 0
-    truncated: bool = False
-    next_cursor: str | None = None
+    truncated: bool = Field(
+        default=False,
+        description="True if the body was cut at max_page_bytes; read the full page via get_page(title=...).",
+    )
+    next_cursor: str | None = Field(
+        default=None,
+        description="Always null; bundled pages do not paginate in place. Use get_page(title=...) for the full body.",
+    )
 
 
 class SessionBundle(BaseModel):

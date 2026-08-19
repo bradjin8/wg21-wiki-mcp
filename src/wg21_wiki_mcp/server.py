@@ -1,4 +1,4 @@
-"""FastMCP server exposing the WG21 wiki tools.
+"""MCPServer exposing the WG21 wiki tools.
 
 Run via the ``wg21-wiki-mcp`` console script (or ``python -m
 wg21_wiki_mcp``). Configuration comes from the environment (see README); the
@@ -14,13 +14,14 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Any, TypeVar
 
-from mcp.server.fastmcp import FastMCP
-from mcp.shared.exceptions import McpError
+from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
+from mcp.shared.exceptions import MCPError
 
 from . import tools
-from .config import DEFAULT_HTTP_HOST, DEFAULT_TRANSPORT, Config
+from .config import DEFAULT_TRANSPORT, Config
 from .context import ServerContext
-from .errors import WikiMcpError, to_mcp_error
+from .errors import ConfigError, WikiMcpError, to_mcp_error
 from .log import get_logger
 from .models import (
     MeetingList,
@@ -38,18 +39,18 @@ _T = TypeVar("_T")
 
 
 def _wrap(fn: Callable[..., _T], /, *args: Any, **kwargs: Any) -> _T:
-    """Call ``fn(*args, **kwargs)`` and convert any domain error to ``McpError``.
+    """Call ``fn(*args, **kwargs)`` and convert any domain error to ``MCPError``.
 
     This is the single chokepoint where ``WikiMcpError`` subclasses
     (``AuthError``, ``PageNotFound``, ``FetchError``, ``ConfigError``) and raw
-    ``mwclient.APIError`` are mapped to structured ``McpError`` with a
+    ``mwclient.APIError`` are mapped to structured ``MCPError`` with a
     distinct, documented code before reaching the MCP transport layer.
-    ``McpError`` instances (including cursor ``INVALID_PARAMS``) pass through
+    ``MCPError`` instances (including cursor ``INVALID_PARAMS``) pass through
     unchanged.
     """
     try:
         return fn(*args, **kwargs)
-    except McpError:
+    except MCPError:
         raise
     except WikiMcpError as exc:
         raise to_mcp_error(exc) from exc
@@ -60,6 +61,10 @@ def _wrap(fn: Callable[..., _T], /, *args: Any, **kwargs: Any) -> _T:
 _state: dict[str, ServerContext] = {}
 _state_lock = threading.Lock()
 _shutting_down = False
+# The SDK's SSE app enters the MCPServer lifespan once per connection, so HTTP
+# transports own the shared ServerContext at process scope (see ``main()``)
+# rather than logging in / tearing it down on every connect.
+_context_process_owned = False
 
 
 def _prime_context(cfg: Config) -> None:
@@ -89,27 +94,40 @@ def get_context() -> ServerContext:
         return ctx
 
 
+def _shutdown_context() -> None:
+    """Close and drop the shared context, briefly blocking new-context creation."""
+    global _shutting_down
+    with _state_lock:
+        _shutting_down = True
+        shutdown_ctx = _state.pop("ctx", None)
+    try:
+        if shutdown_ctx is not None:
+            shutdown_ctx.close()
+    finally:
+        with _state_lock:
+            _shutting_down = False
+
+
 @asynccontextmanager
-async def _lifespan(_server: FastMCP) -> AsyncIterator[dict]:
-    # Build and authenticate up front so misconfiguration fails fast at startup.
+async def _lifespan(_server: MCPServer) -> AsyncIterator[dict]:
+    # Under HTTP transports this lifespan is connection-scoped (the SSE app runs
+    # it once per connection), so it must not log in or tear down the shared
+    # context here; ``main()`` owns that at process scope. The WikiClient still
+    # logs in lazily on first wiki use.
+    if _context_process_owned:
+        yield {}
+        return
+    # stdio enters ``run()`` once, so this path is process-scoped: authenticate up
+    # front so misconfiguration fails fast at startup, then tear down on shutdown.
     ctx = get_context()
     ctx.login()
     try:
         yield {}
     finally:
-        global _shutting_down
-        with _state_lock:
-            _shutting_down = True
-            shutdown_ctx = _state.pop("ctx", None)
-        try:
-            if shutdown_ctx is not None:
-                shutdown_ctx.close()
-        finally:
-            with _state_lock:
-                _shutting_down = False
+        _shutdown_context()
 
 
-mcp = FastMCP(
+mcp = MCPServer(
     "wg21-wiki",
     instructions=(
         "Read-only access to the WG21 (ISO C++) committee wiki as a verifiable "
@@ -236,26 +254,71 @@ def wiki_status() -> WikiStatus:
     return _wrap(tools.wiki_status, get_context())
 
 
+# Hosts for which the MCP SDK auto-enables DNS-rebinding/Host-header validation.
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _http_transport_security(cfg: Config) -> TransportSecuritySettings | None:
+    """Return DNS-rebinding/Host-validation settings for an HTTP bind.
+
+    Loopback binds keep the SDK's built-in localhost protection (returns
+    ``None``, which the SDK reads as "auto-enable for loopback"). A non-loopback
+    bind exposes the shared ``ServerContext`` beyond localhost, where the SDK
+    leaves Host-header validation off unless settings are supplied — so it is
+    rejected unless the operator supplies an allow-list via
+    ``WG21_HTTP_ALLOWED_HOSTS``. The same settings are applied to both the ``sse``
+    and ``streamable-http`` transports.
+    """
+    if cfg.http_host in _LOOPBACK_HOSTS:
+        return None
+    if not cfg.http_allowed_hosts:
+        raise ConfigError(
+            f"Refusing to bind the HTTP transport to non-loopback host {cfg.http_host!r} "
+            "without Host-header validation: set WG21_HTTP_ALLOWED_HOSTS to the allowed "
+            "Host values (comma-separated; exact 'host:port' or 'host:*' wildcard, "
+            "e.g. 'wiki.example.org:*')."
+        )
+    get_logger("server").warning(
+        "HTTP listener binding to non-loopback host %s; the shared ServerContext is "
+        "exposed beyond localhost. Host-header validation is limited to %s.",
+        cfg.http_host,
+        cfg.http_allowed_hosts,
+    )
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=list(cfg.http_allowed_hosts),
+    )
+
+
 def main() -> None:
     """Console-script entry point: run the MCP server (stdio by default)."""
     cfg = Config.from_env()
     _prime_context(cfg)
-    try:
-        if cfg.transport == DEFAULT_TRANSPORT:
+    if cfg.transport == DEFAULT_TRANSPORT:
+        try:
             mcp.run()
-            return
-        if cfg.http_host != DEFAULT_HTTP_HOST:
-            get_logger("server").warning(
-                "HTTP listener binding to %s (not %s); shared ServerContext is exposed beyond localhost",
-                cfg.http_host,
-                DEFAULT_HTTP_HOST,
+        except BaseException:
+            _drop_primed_context()
+            raise
+        return
+    # HTTP transports run the lifespan per connection, so own the shared context
+    # here for the process lifetime and close it once when the listener stops.
+    global _context_process_owned
+    _context_process_owned = True
+    try:
+        security = _http_transport_security(cfg)
+        if cfg.transport == "sse":
+            mcp.run(transport="sse", host=cfg.http_host, port=cfg.http_port, transport_security=security)
+        else:
+            mcp.run(
+                transport="streamable-http",
+                host=cfg.http_host,
+                port=cfg.http_port,
+                transport_security=security,
             )
-        mcp.settings.host = cfg.http_host
-        mcp.settings.port = cfg.http_port
-        mcp.run(transport=cfg.transport)
-    except BaseException:
-        _drop_primed_context()
-        raise
+    finally:
+        _context_process_owned = False
+        _shutdown_context()
 
 
 if __name__ == "__main__":

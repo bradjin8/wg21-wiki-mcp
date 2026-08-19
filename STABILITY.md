@@ -51,7 +51,7 @@ or patch release without a deprecation period.
 | **Cache format** | SQLite schema, file layout under `~/.isocpp.wiki/`, TTL heuristics, lock file names. |
 | **Python import paths** | Internal modules (`cache`, `fetch`, `wiki_client`, …). Only `wg21_wiki_mcp.server`, documented tool functions in `tools`, and public models/errors are intended for programmatic use. |
 | **Log messages** | Wording and structure of log lines (not credentials or page content — see [SECURITY.md](SECURITY.md)). |
-| **Server instructions string** | The FastMCP `instructions` text may be refined. |
+| **Server instructions string** | The MCPServer `instructions` text may be refined. |
 
 ### Explicitly not guaranteed pre-1.0
 

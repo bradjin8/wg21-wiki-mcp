@@ -53,18 +53,19 @@ def _fake_ctx(tmp_path) -> ServerContext:
 async def _run_sse_probe(monkeypatch, tmp_path) -> None:
     ctx = _fake_ctx(tmp_path)
     monkeypatch.setattr(server, "get_context", lambda: ctx)
-    original_host = server.mcp.settings.host
-    original_port = server.mcp.settings.port
+    host = "127.0.0.1"
     port = _free_port()
-    server.mcp.settings.host = "127.0.0.1"
-    server.mcp.settings.port = port
 
     try:
-        async with anyio.create_task_group() as tg:
-            tg.start_soon(server.mcp.run_sse_async)
-            await _wait_until_listening("127.0.0.1", port)
 
-            async with sse_client(f"http://127.0.0.1:{port}/sse", timeout=10) as (read, write):
+        async def _serve_sse() -> None:
+            await server.mcp.run_sse_async(host=host, port=port)
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(_serve_sse)
+            await _wait_until_listening(host, port)
+
+            async with sse_client(f"http://{host}:{port}/sse", timeout=10) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     status = await session.call_tool("wiki_status", {})
@@ -72,17 +73,15 @@ async def _run_sse_probe(monkeypatch, tmp_path) -> None:
 
             tg.cancel_scope.cancel()
 
-        assert not status.isError
+        assert not status.is_error
         status_payload = json.loads(status.content[0].text)
         assert status_payload["authenticated"] is True
 
-        assert not search.isError
+        assert not search.is_error
         search_payload = json.loads(search.content[0].text)
         assert search_payload["hits"][0]["title"] == "Hit"
         assert search_payload["hits"][0]["snippet"] is None
     finally:
-        server.mcp.settings.host = original_host
-        server.mcp.settings.port = original_port
         ctx.close()
 
 
