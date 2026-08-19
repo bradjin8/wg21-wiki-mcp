@@ -32,6 +32,12 @@ for the pre-1.0 API stability policy and deprecation timeline.
   adding the `url_remaps` table to the shared SQLite cache schema.
 - Stabilized cache microbenchmarks (`tests/test_benchmark.py`) with batched put/get and
   count loops so CI regression means are ms-scale instead of µs-scale timer noise.
+- Meeting-time benchmark regression gate now compares the **median** (new
+  `--stat median` option in `scripts/check_benchmark_regression.py`) instead of the
+  mean. The cold concurrent composite runs warmup-off with a fresh cache per round, so
+  a single shared-runner tail spike (one ~50 ms round out of five) inflated the mean and
+  flaked the gate while the median stayed flat; the median still catches genuine
+  (>=1.5x) regressions. The cache gate keeps using the mean.
 - Legacy-URL existence checks now run through the shared `PageFetcher` (cache-first,
   single-flight) instead of a direct client fetch, and the probe budget, deadline, and
   `refresh` flag are threaded per tool response rather than per sanitized field.

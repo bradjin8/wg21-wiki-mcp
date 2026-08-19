@@ -144,15 +144,18 @@ jobs:
             --benchmark-warmup=off \
             --benchmark-min-rounds=5
       - name: Meeting-time benchmark regression gate
-        # Blocking gate. Meeting-time composites are ms-scale on shared runners where
-        # jitter is material; 50% catches genuine regressions (>=1.5x slowdowns) while
-        # tolerating noise. We still re-run once before failing to absorb one-off spikes.
+        # Blocking gate. Meeting-time composites are ms-scale and the cold path runs
+        # warmup-off with a fresh cache per round, so a single shared-runner spike (one
+        # ~50ms round out of five) can dominate the mean while the median stays flat.
+        # We gate on the median, which is robust to that one-off tail: 50% still catches
+        # genuine regressions (>=1.5x slowdowns) while tolerating jitter. We also re-run
+        # once before failing to absorb one-off spikes.
         run: |
           set -euo pipefail
           check_meeting() {
             python scripts/check_benchmark_regression.py \
               meeting-time-benchmark.json benchmarks/meeting-time-baseline.json \
-              --max-regression 0.5
+              --max-regression 0.5 --stat median
           }
           if check_meeting; then
             exit 0

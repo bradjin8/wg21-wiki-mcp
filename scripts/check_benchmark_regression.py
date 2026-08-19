@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail when benchmark means regress more than a threshold vs a committed baseline.
+"""Fail when a benchmark statistic regresses more than a threshold vs a committed baseline.
 
 Compares pytest-benchmark ``--benchmark-json`` output against a committed baseline
 (e.g. ``benchmarks/cache-baseline.json`` or ``benchmarks/meeting-time-baseline.json``).
@@ -31,19 +31,19 @@ def _load_benchmark_json(path: Path, label: str) -> dict:
     return data
 
 
-def _means_by_fullname(data: dict) -> dict[str, float]:
+def _stat_by_fullname(data: dict, stat: str) -> dict[str, float]:
     benchmarks = data.get("benchmarks") or []
-    means: dict[str, float] = {}
+    values: dict[str, float] = {}
     for index, entry in enumerate(benchmarks):
         if not isinstance(entry, dict):
             raise SystemExit(f"benchmark entry at index {index} must be a JSON object")
         try:
             fullname = entry["fullname"]
-            mean = float(entry["stats"]["mean"])
+            value = float(entry["stats"][stat])
         except (KeyError, TypeError, ValueError) as exc:
-            raise SystemExit(f"benchmark entry at index {index} is missing fullname/stats.mean: {exc}") from exc
-        means[str(fullname)] = mean
-    return means
+            raise SystemExit(f"benchmark entry at index {index} is missing fullname/stats.{stat}: {exc}") from exc
+        values[str(fullname)] = value
+    return values
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -55,27 +55,37 @@ def main(argv: list[str] | None = None) -> int:
         "--max-regression",
         type=float,
         default=_DEFAULT_MAX_REGRESSION,
-        help=f"max allowed mean slowdown as a fraction (default: {_DEFAULT_MAX_REGRESSION})",
+        help=f"max allowed slowdown as a fraction (default: {_DEFAULT_MAX_REGRESSION})",
+    )
+    parser.add_argument(
+        "--stat",
+        choices=("mean", "median"),
+        default="mean",
+        help=(
+            "central-tendency statistic to compare (default: mean). Use 'median' for "
+            "high-variance, fat-tailed benchmarks (e.g. cold concurrent composites) where a "
+            "single shared-runner spike would otherwise dominate the mean."
+        ),
     )
     args = parser.parse_args(argv)
 
     current = _load_benchmark_json(args.current, "current")
     baseline = _load_benchmark_json(args.baseline, "baseline")
-    cur_means = _means_by_fullname(current)
-    base_means = _means_by_fullname(baseline)
+    cur_values = _stat_by_fullname(current, args.stat)
+    base_values = _stat_by_fullname(baseline, args.stat)
 
     regressions: list[str] = []
-    for name, base_mean in sorted(base_means.items()):
-        cur_mean = cur_means.get(name)
-        if cur_mean is None:
+    for name, base_value in sorted(base_values.items()):
+        cur_value = cur_values.get(name)
+        if cur_value is None:
             regressions.append(f"{name}: missing from current run")
             continue
-        if base_mean <= 0:
+        if base_value <= 0:
             continue
-        delta = (cur_mean - base_mean) / base_mean
+        delta = (cur_value - base_value) / base_value
         if delta > args.max_regression:
             regressions.append(
-                f"{name}: mean {cur_mean:.6f}s vs baseline {base_mean:.6f}s (+{delta * 100:.1f}%)",
+                f"{name}: {args.stat} {cur_value:.6f}s vs baseline {base_value:.6f}s (+{delta * 100:.1f}%)",
             )
 
     if regressions:
@@ -83,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"REGRESSION: {line}", file=sys.stderr)
         return 1
 
-    print(f"OK: all benchmarks within {args.max_regression * 100:.0f}% mean regression threshold")
+    print(f"OK: all benchmarks within {args.max_regression * 100:.0f}% {args.stat} regression threshold")
     return 0
 
 

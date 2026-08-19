@@ -36,6 +36,12 @@ def _bench_json(means: dict[str, float]) -> dict:
     return {"benchmarks": benchmarks}
 
 
+def _bench_json_stats(stats: dict[str, dict[str, float]]) -> dict:
+    return {
+        "benchmarks": [{"fullname": name, "stats": dict(entry)} for name, entry in stats.items()],
+    }
+
+
 @pytest.mark.parametrize("bench_key", _BENCH_KEYS)
 def test_regression_gate_passes_within_threshold(tmp_path: Path, bench_key: str) -> None:
     baseline = tmp_path / "baseline.json"
@@ -64,6 +70,49 @@ def test_regression_gate_fails_on_missing_benchmark(tmp_path: Path, bench_key: s
     current.write_text(json.dumps(_bench_json({})), encoding="utf-8")
 
     assert main([str(current), str(baseline)]) == 1
+
+
+def test_median_gate_tolerates_single_mean_inflating_outlier(tmp_path: Path) -> None:
+    """A lone fat-tail round inflates the mean past threshold but the median stays flat."""
+    baseline = tmp_path / "baseline.json"
+    current = tmp_path / "current.json"
+    baseline.write_text(
+        json.dumps(_bench_json_stats({_BENCH_MEETING_COLD: {"mean": 0.013871, "median": 0.013772}})),
+        encoding="utf-8",
+    )
+    # Mirrors the observed CI run: rounds ~[14.9, 54.2, 15.7, 15.0, 16.9]ms.
+    current.write_text(
+        json.dumps(_bench_json_stats({_BENCH_MEETING_COLD: {"mean": 0.023339, "median": 0.015702}})),
+        encoding="utf-8",
+    )
+
+    assert main([str(current), str(baseline), "--max-regression", "0.5"]) == 1
+    assert main([str(current), str(baseline), "--max-regression", "0.5", "--stat", "median"]) == 0
+
+
+def test_median_gate_still_catches_genuine_regression(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline.json"
+    current = tmp_path / "current.json"
+    baseline.write_text(
+        json.dumps(_bench_json_stats({_BENCH_MEETING_COLD: {"mean": 0.010, "median": 0.010}})),
+        encoding="utf-8",
+    )
+    current.write_text(
+        json.dumps(_bench_json_stats({_BENCH_MEETING_COLD: {"mean": 0.016, "median": 0.016}})),
+        encoding="utf-8",
+    )
+
+    assert main([str(current), str(baseline), "--max-regression", "0.5", "--stat", "median"]) == 1
+
+
+def test_median_gate_exits_when_stat_missing(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline.json"
+    current = tmp_path / "current.json"
+    baseline.write_text(json.dumps(_bench_json({_BENCH_MEETING_COLD: 0.010})), encoding="utf-8")
+    current.write_text(json.dumps(_bench_json({_BENCH_MEETING_COLD: 0.011})), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="missing fullname/stats.median"):
+        main([str(current), str(baseline), "--stat", "median"])
 
 
 def test_regression_gate_exits_on_missing_baseline(tmp_path: Path) -> None:
