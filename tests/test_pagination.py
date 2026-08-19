@@ -5,7 +5,29 @@ from __future__ import annotations
 import pytest
 from mcp.shared.exceptions import MCPError
 
-from wg21_wiki_mcp.pagination import chunk_utf8, cursor_offset, decode_cursor, encode_cursor
+from wg21_wiki_mcp.pagination import (
+    body_digest,
+    chunk_utf8,
+    cursor_offset,
+    decode_cursor,
+    encode_cursor,
+    encode_page_chunk_cursor,
+    page_chunk_offset,
+)
+
+
+def test_page_chunk_cursor_rejects_equal_length_different_body():
+    """Same revid and identical length but different sanitized bytes must not resume."""
+    revid = 42
+    data_a = ("a" * 100).encode("utf-8")
+    data_b = ("b" * 100).encode("utf-8")  # same length, same revid, different content
+    cursor = encode_page_chunk_cursor(10, revid=revid, total_bytes=len(data_a), digest=body_digest(data_a))
+
+    with pytest.raises(MCPError):
+        page_chunk_offset(cursor, revid=revid, total_bytes=len(data_b), digest=body_digest(data_b))
+
+    # The body the cursor was minted from still resumes at its stored offset.
+    assert page_chunk_offset(cursor, revid=revid, total_bytes=len(data_a), digest=body_digest(data_a)) == 10
 
 
 def test_cursor_roundtrip():

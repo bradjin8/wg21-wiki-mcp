@@ -148,6 +148,35 @@ def test_lifespan_runs(monkeypatch, tmp_path):
     assert asyncio.run(run()) is True
 
 
+def test_lifespan_process_owned_is_connection_scoped(monkeypatch, tmp_path):
+    """Under HTTP ownership the lifespan must not log in or tear down the shared context."""
+    ctx = _fake_ctx(tmp_path)
+    with server._state_lock:
+        server._state["ctx"] = ctx
+    monkeypatch.setattr(server, "_context_process_owned", True)
+
+    def _fail_get_context() -> ServerContext:
+        raise AssertionError("process-owned lifespan must not build/log in a context")
+
+    monkeypatch.setattr(server, "get_context", _fail_get_context)
+
+    async def run():
+        async with server._lifespan(server.mcp):
+            with server._state_lock:
+                assert server._state.get("ctx") is ctx
+            return True
+
+    try:
+        assert asyncio.run(run()) is True
+        # The shared context survives the connection-scoped lifespan exit.
+        with server._state_lock:
+            assert server._state.get("ctx") is ctx
+    finally:
+        with server._state_lock:
+            server._state.pop("ctx", None)
+        ctx.close()
+
+
 def test_wrap_passthrough_mcp_error():
     from mcp.shared.exceptions import MCPError
 
@@ -156,8 +185,10 @@ def test_wrap_passthrough_mcp_error():
     def _raise_mcp() -> None:
         raise MCPError(-32602, "bad params")
 
-    with pytest.raises(MCPError):
+    with pytest.raises(MCPError) as exc_info:
         _wrap(_raise_mcp)
+    assert exc_info.value.code == -32602
+    assert exc_info.value.message == "bad params"
 
 
 def test_wrap_converts_unexpected_exception():
@@ -207,7 +238,7 @@ def test_main_selects_sse_transport(monkeypatch):
     try:
         server.main()
         assert captured["transport"] == "sse"
-        assert captured["kwargs"]["port"] == 8765
+        assert captured["kwargs"] == {"host": "127.0.0.1", "port": 8765}
     finally:
         with server._state_lock:
             ctx = server._state.pop("ctx", None)

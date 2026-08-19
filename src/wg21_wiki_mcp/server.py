@@ -60,6 +60,10 @@ def _wrap(fn: Callable[..., _T], /, *args: Any, **kwargs: Any) -> _T:
 _state: dict[str, ServerContext] = {}
 _state_lock = threading.Lock()
 _shutting_down = False
+# The SDK's SSE app enters the MCPServer lifespan once per connection, so HTTP
+# transports own the shared ServerContext at process scope (see ``main()``)
+# rather than logging in / tearing it down on every connect.
+_context_process_owned = False
 
 
 def _prime_context(cfg: Config) -> None:
@@ -89,24 +93,37 @@ def get_context() -> ServerContext:
         return ctx
 
 
+def _shutdown_context() -> None:
+    """Close and drop the shared context, briefly blocking new-context creation."""
+    global _shutting_down
+    with _state_lock:
+        _shutting_down = True
+        shutdown_ctx = _state.pop("ctx", None)
+    try:
+        if shutdown_ctx is not None:
+            shutdown_ctx.close()
+    finally:
+        with _state_lock:
+            _shutting_down = False
+
+
 @asynccontextmanager
 async def _lifespan(_server: MCPServer) -> AsyncIterator[dict]:
-    # Build and authenticate up front so misconfiguration fails fast at startup.
+    # Under HTTP transports this lifespan is connection-scoped (the SSE app runs
+    # it once per connection), so it must not log in or tear down the shared
+    # context here; ``main()`` owns that at process scope. The WikiClient still
+    # logs in lazily on first wiki use.
+    if _context_process_owned:
+        yield {}
+        return
+    # stdio enters ``run()`` once, so this path is process-scoped: authenticate up
+    # front so misconfiguration fails fast at startup, then tear down on shutdown.
     ctx = get_context()
     ctx.login()
     try:
         yield {}
     finally:
-        global _shutting_down
-        with _state_lock:
-            _shutting_down = True
-            shutdown_ctx = _state.pop("ctx", None)
-        try:
-            if shutdown_ctx is not None:
-                shutdown_ctx.close()
-        finally:
-            with _state_lock:
-                _shutting_down = False
+        _shutdown_context()
 
 
 mcp = MCPServer(
@@ -240,23 +257,31 @@ def main() -> None:
     """Console-script entry point: run the MCP server (stdio by default)."""
     cfg = Config.from_env()
     _prime_context(cfg)
-    try:
-        if cfg.transport == DEFAULT_TRANSPORT:
+    if cfg.transport == DEFAULT_TRANSPORT:
+        try:
             mcp.run()
-            return
-        if cfg.http_host != DEFAULT_HTTP_HOST:
-            get_logger("server").warning(
-                "HTTP listener binding to %s (not %s); shared ServerContext is exposed beyond localhost",
-                cfg.http_host,
-                DEFAULT_HTTP_HOST,
-            )
+        except BaseException:
+            _drop_primed_context()
+            raise
+        return
+    if cfg.http_host != DEFAULT_HTTP_HOST:
+        get_logger("server").warning(
+            "HTTP listener binding to %s (not %s); shared ServerContext is exposed beyond localhost",
+            cfg.http_host,
+            DEFAULT_HTTP_HOST,
+        )
+    # HTTP transports run the lifespan per connection, so own the shared context
+    # here for the process lifetime and close it once when the listener stops.
+    global _context_process_owned
+    _context_process_owned = True
+    try:
         if cfg.transport == "sse":
             mcp.run(transport="sse", host=cfg.http_host, port=cfg.http_port)
         else:
             mcp.run(transport="streamable-http", host=cfg.http_host, port=cfg.http_port)
-    except BaseException:
-        _drop_primed_context()
-        raise
+    finally:
+        _context_process_owned = False
+        _shutdown_context()
 
 
 if __name__ == "__main__":

@@ -8,10 +8,21 @@ reassembling all slices reproduces the page byte-for-byte.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 
 from mcp.shared.exceptions import MCPError
 from mcp.types import INVALID_PARAMS
+
+
+def body_digest(data: bytes) -> str:
+    """Short content digest that binds a chunk cursor to exact sanitized bytes.
+
+    Guards against resuming a cursor into a *different* body that happens to share
+    the same revision and byte length (e.g. two URL-hygiene results of equal
+    length, or a section vs. full-page fetch that share the page revid).
+    """
+    return hashlib.blake2b(data, digest_size=16).hexdigest()
 
 
 def encode_cursor(payload: dict) -> str:
@@ -61,24 +72,26 @@ def page_chunk_offset(
     *,
     revid: int | None,
     total_bytes: int,
+    digest: str,
 ) -> int:
-    """Return a byte offset bound to ``revid`` and ``total_bytes``.
+    """Return a byte offset bound to ``revid``, ``total_bytes`` and ``digest``.
 
-    Sanitized page text can change length between calls, so a bare offset is not
-    enough to resume chunking safely.
+    Sanitized page text can change (and even keep the same length) between calls,
+    so the offset is only honored when the cursor's bound revision, byte length,
+    and content digest all still match the body being chunked.
     """
     payload = decode_cursor(cursor)
     if not payload:
         return 0
     offset = _validated_offset(payload.get("o", 0))
-    if payload.get("r") != revid or payload.get("t") != total_bytes:
+    if payload.get("r") != revid or payload.get("t") != total_bytes or payload.get("h") != digest:
         raise MCPError(INVALID_PARAMS, "Invalid or expired cursor.")
     return offset
 
 
-def encode_page_chunk_cursor(byte_end: int, *, revid: int | None, total_bytes: int) -> str:
-    """Encode a chunk cursor bound to the sanitized body identity."""
-    return encode_cursor({"o": byte_end, "r": revid, "t": total_bytes})
+def encode_page_chunk_cursor(byte_end: int, *, revid: int | None, total_bytes: int, digest: str) -> str:
+    """Encode a chunk cursor bound to the sanitized body identity (revid, length, digest)."""
+    return encode_cursor({"o": byte_end, "r": revid, "t": total_bytes, "h": digest})
 
 
 def _floor_utf8_boundary(data: bytes, index: int) -> int:

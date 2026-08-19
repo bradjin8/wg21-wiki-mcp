@@ -54,9 +54,12 @@ session), transparently re-logs-in via the pinned path.
   cache; at the tool boundary legacy ``wiki.edg.com`` links in ``get_page``
   bodies, bundled meeting-session wikitext (when ``include_wikitext`` includes a
   page body), search snippets (when opted in), and recent-change comments are
-  rewritten to ``wiki.isocpp.org`` before the MCP response. A link with no known
-  successor keeps its URL followed by the literal marker ``(stale URL)``, chosen
-  so the annotation cannot open a MediaWiki link sequence.
+  rewritten to ``wiki.isocpp.org`` before the MCP response. When a legacy link is
+  not resolved — no known successor, the shared probe budget is exhausted, or a
+  probe fails or times out — it keeps its original URL followed by the literal
+  marker ``(stale URL)``. The marker is a best-effort "unresolved" verdict, not a
+  proof that no successor exists, and is chosen so the annotation cannot open a
+  MediaWiki link sequence.
 - Every result carries verifiable provenance; redirects and title normalization
   are surfaced so content is never misattributed.
 - Long pages are chunked only on UTF-8 boundaries; partiality is always signaled

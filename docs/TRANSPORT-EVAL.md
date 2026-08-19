@@ -21,8 +21,11 @@ The project pins `mcp>=2,<3` (`pyproject.toml`). `MCPServer.run()` accepts:
 | `streamable-http` | `run_streamable_http_async()` via uvicorn | `127.0.0.1:8000` | `/mcp` |
 
 Both HTTP modes use **uvicorn** (a transitive dependency of `mcp`) and Starlette
-routing. Host, port, and path overrides are passed to `MCPServer.run()` or
-`run_sse_async()` / `streamable_http_app()` (not via a shared `settings` object).
+routing. Host and port are passed to `MCPServer.run()` or to the async runners
+(`run_sse_async()` / `run_streamable_http_async()`), not via a shared `settings`
+object. The app factories (`sse_app()` / `streamable_http_app()`) return an ASGI
+application and accept path and `host` overrides but **not** a port — when
+serving the ASGI app directly, configure the port on the ASGI server (uvicorn).
 
 **Streamable HTTP** is the newer MCP transport (replacing the older SSE split
 endpoint pattern in many clients). It is available in our pinned SDK version and
@@ -63,8 +66,9 @@ client SDK.
 
 `server.py` keeps a process-global `ServerContext` in `_state`, guarded by
 `_state_lock`. `get_context()` lazily builds one context from `Config.from_env()`
-and caches it for the process lifetime. The `_lifespan` hook logs in once at
-server start and tears the context down on shutdown.
+and caches it for the process lifetime. For stdio, the `_lifespan` hook logs in
+once at server start and tears the context down on shutdown; for HTTP transports
+`server.main()` owns that lifecycle instead (see below).
 
 ### Implications for HTTP transports
 
@@ -91,9 +95,15 @@ multi-agent local use (shared `~/.isocpp.wiki` cache directory).
   same env-configured bot/user credentials. Multi-tenant remote hosting would
   require per-session auth and context, not this singleton.
 
-The `_lifespan` manager runs at **process** start/stop (MCPServer invokes it when
-the HTTP server boots), not per SSE connection — so we do not re-login on every
-HTTP connect. That matches stdio behavior and avoids login storms.
+Under the SDK's SSE app the MCPServer lifespan is **connection-scoped**: the app
+enters it once per SSE connection. So `server.main()` owns the shared
+`ServerContext` at **process** scope instead — it neither logs in nor tears the
+context down per connect. Login happens lazily on first wiki use (or once at
+stdio start, which enters its lifespan a single time), and the context is closed
+once when the listener stops. This avoids re-login storms and prevents one
+connection's teardown from closing a context still in use by another. (The
+streamable-HTTP session manager owns its own process-scoped app lifespan, so it
+does not re-enter the per-connection path either.)
 
 ## Security implications
 

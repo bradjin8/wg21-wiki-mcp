@@ -45,6 +45,7 @@ from .models import (
     WikiStatus,
 )
 from .pagination import (
+    body_digest,
     chunk_utf8,
     cursor_offset,
     decode_cursor,
@@ -361,10 +362,14 @@ def get_page(
         discover_meetings=_memoized_meeting_discoverer(ctx, deadline),
     )
 
-    total_bytes = len(content.encode("utf-8"))
-    start = page_chunk_offset(cursor, revid=prov.revid, total_bytes=total_bytes)
+    data = content.encode("utf-8")
+    total_bytes = len(data)
+    digest = body_digest(data)
+    start = page_chunk_offset(cursor, revid=prov.revid, total_bytes=total_bytes, digest=digest)
     chunk_text, byte_start, byte_end, total, has_more = chunk_utf8(content, start=start, max_bytes=max_bytes)
-    next_cursor = encode_page_chunk_cursor(byte_end, revid=prov.revid, total_bytes=total) if has_more else None
+    next_cursor = (
+        encode_page_chunk_cursor(byte_end, revid=prov.revid, total_bytes=total, digest=digest) if has_more else None
+    )
     return PageContent(
         provenance=prov,
         section=section,
