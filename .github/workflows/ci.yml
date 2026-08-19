@@ -134,9 +134,10 @@ jobs:
             --benchmark-min-rounds=10
           check
       - name: Run meeting-time benchmarks
-        # benchmarks/meeting-time-baseline.json holds measured means from this
-        # runner (ubuntu-latest, Python 3.12). Regenerate from the benchmark-json
-        # artifact when meeting-time benchmark code changes.
+        # benchmarks/meeting-time-baseline.json holds full measured stats (both means
+        # and medians) from this runner (ubuntu-latest, Python 3.12); the gate below
+        # compares the median. Regenerate from the benchmark-json artifact when
+        # meeting-time benchmark code changes.
         run: |
           pytest tests/test_meeting_time_benchmark.py --benchmark-only --no-cov \
             -o addopts= \
