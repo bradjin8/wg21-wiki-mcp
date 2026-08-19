@@ -15,12 +15,13 @@ from contextlib import asynccontextmanager
 from typing import Any, TypeVar
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.exceptions import MCPError
 
 from . import tools
-from .config import DEFAULT_HTTP_HOST, DEFAULT_TRANSPORT, Config
+from .config import DEFAULT_TRANSPORT, Config
 from .context import ServerContext
-from .errors import WikiMcpError, to_mcp_error
+from .errors import ConfigError, WikiMcpError, to_mcp_error
 from .log import get_logger
 from .models import (
     MeetingList,
@@ -253,6 +254,42 @@ def wiki_status() -> WikiStatus:
     return _wrap(tools.wiki_status, get_context())
 
 
+# Hosts for which the MCP SDK auto-enables DNS-rebinding/Host-header validation.
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _http_transport_security(cfg: Config) -> TransportSecuritySettings | None:
+    """Return DNS-rebinding/Host-validation settings for an HTTP bind.
+
+    Loopback binds keep the SDK's built-in localhost protection (returns
+    ``None``, which the SDK reads as "auto-enable for loopback"). A non-loopback
+    bind exposes the shared ``ServerContext`` beyond localhost, where the SDK
+    leaves Host-header validation off unless settings are supplied — so it is
+    rejected unless the operator supplies an allow-list via
+    ``WG21_HTTP_ALLOWED_HOSTS``. The same settings are applied to both the ``sse``
+    and ``streamable-http`` transports.
+    """
+    if cfg.http_host in _LOOPBACK_HOSTS:
+        return None
+    if not cfg.http_allowed_hosts:
+        raise ConfigError(
+            f"Refusing to bind the HTTP transport to non-loopback host {cfg.http_host!r} "
+            "without Host-header validation: set WG21_HTTP_ALLOWED_HOSTS to the allowed "
+            "Host values (comma-separated; exact 'host:port' or 'host:*' wildcard, "
+            "e.g. 'wiki.example.org:*')."
+        )
+    get_logger("server").warning(
+        "HTTP listener binding to non-loopback host %s; the shared ServerContext is "
+        "exposed beyond localhost. Host-header validation is limited to %s.",
+        cfg.http_host,
+        cfg.http_allowed_hosts,
+    )
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=list(cfg.http_allowed_hosts),
+    )
+
+
 def main() -> None:
     """Console-script entry point: run the MCP server (stdio by default)."""
     cfg = Config.from_env()
@@ -264,21 +301,21 @@ def main() -> None:
             _drop_primed_context()
             raise
         return
-    if cfg.http_host != DEFAULT_HTTP_HOST:
-        get_logger("server").warning(
-            "HTTP listener binding to %s (not %s); shared ServerContext is exposed beyond localhost",
-            cfg.http_host,
-            DEFAULT_HTTP_HOST,
-        )
     # HTTP transports run the lifespan per connection, so own the shared context
     # here for the process lifetime and close it once when the listener stops.
     global _context_process_owned
     _context_process_owned = True
     try:
+        security = _http_transport_security(cfg)
         if cfg.transport == "sse":
-            mcp.run(transport="sse", host=cfg.http_host, port=cfg.http_port)
+            mcp.run(transport="sse", host=cfg.http_host, port=cfg.http_port, transport_security=security)
         else:
-            mcp.run(transport="streamable-http", host=cfg.http_host, port=cfg.http_port)
+            mcp.run(
+                transport="streamable-http",
+                host=cfg.http_host,
+                port=cfg.http_port,
+                transport_security=security,
+            )
     finally:
         _context_process_owned = False
         _shutdown_context()

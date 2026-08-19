@@ -141,6 +141,7 @@ class Config:
     transport: TransportName = DEFAULT_TRANSPORT
     http_host: str = DEFAULT_HTTP_HOST
     http_port: int = DEFAULT_HTTP_PORT
+    http_allowed_hosts: list[str] = field(default_factory=list)
 
     @classmethod
     def from_env(cls, *, load_env_file: bool = True) -> Config:
@@ -191,6 +192,7 @@ class Config:
             transport=_parse_transport(_env_first("WG21_TRANSPORT")),
             http_host=_env_first("WG21_HTTP_HOST") or DEFAULT_HTTP_HOST,
             http_port=_env_port("WG21_HTTP_PORT", DEFAULT_HTTP_PORT),
+            http_allowed_hosts=_parse_allowed_hosts(_env_first("WG21_HTTP_ALLOWED_HOSTS")),
         )
 
     @property
@@ -239,6 +241,16 @@ def _env_port(name: str, default: int) -> int:
         )
         return default
     return value
+
+
+def _parse_allowed_hosts(raw: str) -> list[str]:
+    """Parse a comma-separated allow-list of Host header values (``WG21_HTTP_ALLOWED_HOSTS``).
+
+    Each entry is an exact host or a ``host:*`` wildcard-port pattern, matching the
+    MCP SDK's ``TransportSecuritySettings.allowed_hosts`` grammar. Empty entries
+    are dropped; order is preserved.
+    """
+    return [item.strip() for item in raw.split(",") if item.strip()]
 
 
 def _parse_transport(raw: str) -> TransportName:

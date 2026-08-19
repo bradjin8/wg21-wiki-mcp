@@ -36,8 +36,13 @@ is the better long-term HTTP choice when we invest in remote deployment.
 
 Out of the box the SDK also supports optional **Bearer token auth**
 (`settings.auth`, `AuthenticationMiddleware`) and **DNS rebinding protection**
-(`transport_security` with `allowed_hosts` / `allowed_origins` defaulting to
-localhost). We do not enable auth in the prototype.
+(`transport_security` with `allowed_hosts` / `allowed_origins`). The SDK only
+**auto-enables** Host-header validation for loopback hosts (`127.0.0.1`,
+`localhost`, `::1`); a non-loopback bind is served with validation **off** unless
+settings are supplied. `server.main()` closes that gap: it refuses a non-loopback
+bind unless `WG21_HTTP_ALLOWED_HOSTS` supplies an allow-list, then passes an
+explicit `TransportSecuritySettings(enable_dns_rebinding_protection=True,
+allowed_hosts=...)` to both transports. We do not enable auth in the prototype.
 
 ### Prototype wiring
 
@@ -51,12 +56,18 @@ WG21_TRANSPORT=streamable-http wg21-wiki-mcp
 
 # Optional bind overrides
 WG21_HTTP_HOST=127.0.0.1 WG21_HTTP_PORT=9000 WG21_TRANSPORT=sse wg21-wiki-mcp
+
+# Non-loopback bind: an allow-list of Host header values is required
+WG21_HTTP_HOST=0.0.0.0 WG21_HTTP_ALLOWED_HOSTS=wiki.example.org:* WG21_TRANSPORT=sse wg21-wiki-mcp
 ```
 
-`Config.transport`, `Config.http_host`, and `Config.http_port` are read from
-`WG21_TRANSPORT`, `WG21_HTTP_HOST`, and `WG21_HTTP_PORT` in `config.py`.
-`server.main()` passes HTTP bind settings as keyword arguments to
-`mcp.run(transport=..., host=..., port=...)`.
+`Config.transport`, `Config.http_host`, `Config.http_port`, and
+`Config.http_allowed_hosts` are read from `WG21_TRANSPORT`, `WG21_HTTP_HOST`,
+`WG21_HTTP_PORT`, and `WG21_HTTP_ALLOWED_HOSTS` in `config.py`. `server.main()`
+passes HTTP bind settings as keyword arguments to
+`mcp.run(transport=..., host=..., port=..., transport_security=...)`, where
+`transport_security` is `None` for loopback (SDK auto-protects) and an explicit
+allow-list for non-loopback binds.
 
 Offline tests in `tests/test_transport_sse.py` start an SSE listener with a
 fake `ServerContext` and call `wiki_status` and `search_wiki` through the MCP
@@ -111,8 +122,9 @@ does not re-enter the per-connection path either.)
 |-------|------|----------------------|------------------------|
 | **Credential exposure** | Wiki passwords in env vars; HTTP exposes an attack surface on the host | Default bind `127.0.0.1`; not documented for WAN | Secrets via vault; never expose raw wiki creds to clients |
 | **Transport encryption** | HTTP is cleartext | Localhost-only defaults | TLS termination (reverse proxy or uvicorn SSL) |
-| **Authentication** | Anyone who can reach the port can call tools | Localhost bind; SDK DNS-rebinding defaults | MCP-layer Bearer/OAuth + network ACLs |
-| **CORS** | Browser-origin clients could call the API | SDK `allowed_origins` defaults to localhost | Explicit origin allowlist if browser clients are needed |
+| **Authentication** | Anyone who can reach the port can call tools | Localhost bind; loopback auto-gets SDK Host validation; non-loopback binds refused unless `WG21_HTTP_ALLOWED_HOSTS` is set | MCP-layer Bearer/OAuth + network ACLs |
+| **DNS rebinding / Host spoofing** | A rebound name reaches a non-loopback listener | Loopback auto-protected; non-loopback requires an explicit `allowed_hosts` allow-list or the bind is refused | Curated allow-list per deployment |
+| **CORS** | Browser-origin clients could call the API | `allowed_origins` left empty (browser Origins rejected); non-browser clients send no Origin | Explicit origin allowlist if browser clients are needed |
 | **Rate limiting** | Unbounded tool calls → wiki API abuse | None in prototype | Per-client or global rate limits; cache-first already helps |
 | **Information disclosure** | Tools return verbatim wiki content | Same as stdio — intended for authorized users | Access control at MCP boundary |
 

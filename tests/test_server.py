@@ -238,7 +238,62 @@ def test_main_selects_sse_transport(monkeypatch):
     try:
         server.main()
         assert captured["transport"] == "sse"
-        assert captured["kwargs"] == {"host": "127.0.0.1", "port": 8765}
+        # Loopback bind keeps the SDK's built-in localhost protection (None).
+        assert captured["kwargs"] == {"host": "127.0.0.1", "port": 8765, "transport_security": None}
+    finally:
+        with server._state_lock:
+            ctx = server._state.pop("ctx", None)
+        if ctx is not None:
+            ctx.close()
+
+
+def test_main_rejects_non_loopback_http_without_allowlist(monkeypatch):
+    monkeypatch.setenv("WIKI_BOT_USERNAME", "Acct@bot")
+    monkeypatch.setenv("WIKI_BOT_PASSWORD", "secret")
+    monkeypatch.setenv("WG21_TRANSPORT", "sse")
+    monkeypatch.setenv("WG21_HTTP_HOST", "0.0.0.0")
+    monkeypatch.delenv("WG21_HTTP_ALLOWED_HOSTS", raising=False)
+    ran = {"called": False}
+
+    def _run(*args: object, **kwargs: object) -> None:
+        ran["called"] = True
+
+    monkeypatch.setattr(server.mcp, "run", _run)
+    try:
+        with pytest.raises(server.ConfigError, match="non-loopback"):
+            server.main()
+        assert ran["called"] is False
+        # The primed context is torn down when the bind is refused.
+        with server._state_lock:
+            assert "ctx" not in server._state
+    finally:
+        with server._state_lock:
+            ctx = server._state.pop("ctx", None)
+        if ctx is not None:
+            ctx.close()
+
+
+def test_main_non_loopback_http_with_allowlist_sets_host_validation(monkeypatch):
+    monkeypatch.setenv("WIKI_BOT_USERNAME", "Acct@bot")
+    monkeypatch.setenv("WIKI_BOT_PASSWORD", "secret")
+    monkeypatch.setenv("WG21_TRANSPORT", "streamable-http")
+    monkeypatch.setenv("WG21_HTTP_HOST", "0.0.0.0")
+    monkeypatch.setenv("WG21_HTTP_ALLOWED_HOSTS", "wiki.example.org:*, 203.0.113.5:8000")
+    captured: dict[str, object] = {}
+
+    def _run(transport: str = "stdio", **kwargs: object) -> None:
+        captured["transport"] = transport
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(server.mcp, "run", _run)
+    try:
+        server.main()
+        assert captured["transport"] == "streamable-http"
+        security = captured["kwargs"]["transport_security"]
+        assert security is not None
+        assert security.enable_dns_rebinding_protection is True
+        # Parsed in order, whitespace trimmed, applied to the transport.
+        assert security.allowed_hosts == ["wiki.example.org:*", "203.0.113.5:8000"]
     finally:
         with server._state_lock:
             ctx = server._state.pop("ctx", None)
