@@ -72,7 +72,7 @@ def page_chunk_offset(
         return 0
     offset = _validated_offset(payload.get("o", 0))
     if payload.get("r") != revid or payload.get("t") != total_bytes:
-        raise McpError(ErrorData(code=INVALID_PARAMS, message="Invalid or expired cursor."))
+        raise MCPError(INVALID_PARAMS, "Invalid or expired cursor.")
     return offset
 
 

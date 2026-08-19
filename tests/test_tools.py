@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 from conftest import FakeCalendar, FakePage
-from mcp.shared.exceptions import McpError
+from mcp.shared.exceptions import MCPError
 
 from wg21_wiki_mcp import tools
 from wg21_wiki_mcp.models import FetchError, PageNotFound
@@ -167,7 +167,7 @@ def test_get_page_rejects_stale_chunk_cursor(fake_client, make_ctx):
     ctx = make_ctx(fake_client)
     first = tools.get_page(ctx, "P", max_bytes=1024)
     stale_cursor = encode_page_chunk_cursor(first.chunk.byte_end, revid=1, total_bytes=first.chunk.total_bytes)
-    with pytest.raises(McpError):
+    with pytest.raises(MCPError):
         tools.get_page(ctx, "P", max_bytes=1024, cursor=stale_cursor)
 
 
@@ -183,7 +183,7 @@ def test_get_page_rejects_cursor_with_wrong_total_bytes(fake_client, make_ctx):
         revid=first.provenance.revid,
         total_bytes=first.chunk.total_bytes + 1,
     )
-    with pytest.raises(McpError):
+    with pytest.raises(MCPError):
         tools.get_page(ctx, "P", max_bytes=1024, cursor=bad_cursor)
 
 

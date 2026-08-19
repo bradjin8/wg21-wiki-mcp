@@ -40,6 +40,20 @@ for the pre-1.0 API stability policy and deprecation timeline.
   `run()` instead of `mcp.settings`. Lockfile regenerated for v2 transitive deps
   (`mcp-types`, `httpx2`, etc.). Closes
   [#99](https://github.com/cppalliance/wg21-wiki-mcp/issues/99).
+- Rolled the pending Dependabot dependency bumps into the v2 migration lockfile so
+  they land in one reviewable change instead of conflicting group PRs
+  ([#103](https://github.com/cppalliance/wg21-wiki-mcp/pull/103),
+  [#102](https://github.com/cppalliance/wg21-wiki-mcp/pull/102),
+  [#96](https://github.com/cppalliance/wg21-wiki-mcp/pull/96)):
+  - Runtime transitive pins refreshed in `requirements-lock.txt`: `cffi` 2.1.1,
+    `charset-normalizer` 3.5.1, `cryptography` 50.0.0, `filelock` 3.32.3,
+    `soupsieve` 2.9.2, `sse-starlette` 3.4.8, `starlette` 1.6.0,
+    `typing-inspection` 0.4.4, `uvicorn` 0.52.3 (plus `httpx2`/`httpcore2` 2.12.0,
+    `idna` 3.19, `python-dotenv` 1.2.3, `rpds-py` 2026.6.3).
+  - Dev tooling: `pip-tools` 7.6.0 → 7.6.1, which supports pip 26.2+, so the CI
+    lockfile job drops the `pip<26.2` pin workaround.
+  - Pinned GitHub Actions: `sigstore/gh-action-sigstore-python` v3.4.0 → v3.5.0 and
+    `pypa/gh-action-pypi-publish` v1.14.1 → v1.14.2 in `publish.yml`.
 
 ## [0.3.1] - 2026-07-31
 
